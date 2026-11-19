@@ -8,6 +8,7 @@
 
 - **My other projects**, in the installer: the author's other plugins and apps for the Vita, Tweaks/Plugins and CyberFlow Launcher, each with photos and what it does. **Download** lists a project's releases with their notes and installs the one you choose. CyberFlow goes in through the Vita's own installer, with a switch for its data files (422 MB), which are unpacked to `ux0:data/RetroFlow`. Tweaks/Plugins is copied to `ur0:tai` and put first under `*NPXS10015` in taiHEN's config, keeping the old file. Everything downloaded is checked against the SHA-256 GitHub lists for it. The photos, releases and notes are kept in `ux0:data/engram_installer`, so they show at once the next time, and with no network.
 - The installer's enter and back buttons are the Vita's own: O and X on a Japanese console, X and O elsewhere, or as HENkaku Settings has them.
+- The installer says when the Engram installed isn't the one it carries, so an update isn't missed.
 
 ### Improved
 

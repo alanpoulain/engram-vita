@@ -79,6 +79,7 @@ unsigned int _newlib_heap_size_user = 64 * 1024 * 1024;
 #define COLOR_ACCENT RGB(0x7C, 0xC0, 0xFF)
 #define COLOR_GOOD RGB(0x76, 0xE0, 0x96)
 #define COLOR_BAD RGB(0xFF, 0x84, 0x84)
+#define COLOR_WARN RGB(0xF0, 0xC3, 0x6A)
 #define COLOR_PANEL RGB(10, 12, 20)
 
 // ---- enter and back ----
@@ -532,6 +533,24 @@ static bool uninstall(void) {
 	return true;
 }
 
+// Whether Engram is installed, and whether it is the one this installer
+// carries: a plugin put in by an older installer, or by hand, isn't.
+enum { ENGRAM_NONE, ENGRAM_SAME, ENGRAM_OTHER };
+static int engram_state;
+
+static int engram_installed(void) {
+	if (!file_exists(PLUGIN_PATH))
+		return ENGRAM_NONE;
+	int have_len = 0, own_len = 0;
+	char *have = file_read(PLUGIN_PATH, PLUGIN_MAX, &have_len);
+	char *own = file_read(BUNDLED_PLUGIN, PLUGIN_MAX, &own_len);
+	// (if either can't be read there is nothing to compare, and nothing to say)
+	bool other = have && own && (have_len != own_len || memcmp(have, own, (size_t)own_len) != 0);
+	free(have);
+	free(own);
+	return other ? ENGRAM_OTHER : ENGRAM_SAME;
+}
+
 // ---- the screen ----
 
 enum { VIEW_MENU, VIEW_WORKING, VIEW_RESULT, VIEW_WINDOW };
@@ -741,7 +760,7 @@ static void render_projects(int chosen) {
 // The overlay: the title, two glass panels (the menu, and what Engram does or
 // what just happened) and the buttons along the bottom. The panels and title
 // never change, so they're drawn once and kept.
-static void render_ui(int view, int selected, bool installed, bool ok, const char *perf) {
+static void render_ui(int view, int selected, int installed, bool ok, const char *perf) {
 	if (chrome_kind == CHROME_MAIN) {
 		gfx_restore();
 	} else {
@@ -764,9 +783,12 @@ static void render_ui(int view, int selected, bool installed, bool ok, const cha
 	}
 
 	// left: the menu
-	gfx_dot(LEFT_X + 30, PANEL_Y + 31, 5, installed ? COLOR_GOOD : COLOR_DIM, 255);
-	gfx_text(LEFT_X + 46, PANEL_Y + 19, 16.0f, COLOR_DIM, 255,
-	         installed ? "Engram is installed" : "Engram isn't installed yet");
+	gfx_dot(LEFT_X + 30, PANEL_Y + 31, 5,
+	        installed == ENGRAM_SAME ? COLOR_GOOD : installed == ENGRAM_OTHER ? COLOR_WARN : COLOR_DIM, 255);
+	gfx_text(LEFT_X + 46, PANEL_Y + 19, 16.0f, installed == ENGRAM_OTHER ? COLOR_WARN : COLOR_DIM, 255,
+	         installed == ENGRAM_SAME    ? "Engram " ENGRAM_VERSION " is installed"
+	         : installed == ENGRAM_OTHER ? "Installed, but not " ENGRAM_VERSION ": update it"
+	                                     : "Engram isn't installed yet");
 	for (int i = 0; i < MENU_COUNT; i++) {
 		int y = ROW_Y + i * ROW_H;
 		bool on = i == selected && view == VIEW_MENU;
@@ -850,7 +872,7 @@ static void say(SayKind kind, bool again, const char *fmt, ...) {
 	if (win_job)
 		render_window();
 	else
-		render_ui(VIEW_WORKING, busy_selected, file_exists(PLUGIN_PATH), false, "");
+		render_ui(VIEW_WORKING, busy_selected, engram_state, false, "");
 	gfx_show();
 	liquid_frame(gfx_back(), gfx_back_index(), busy_clock, true, gfx_layers());
 	gfx_present();
@@ -1230,8 +1252,8 @@ enum { REDRAW_IDLE, REDRAW_DRAWING, REDRAW_READY };
 static volatile int redraw_state;
 static SceUID redraw_wake = -1;
 static struct {
-	int view, selected;
-	bool installed, ok;
+	int view, selected, installed;
+	bool ok;
 	char perf[48];
 } redraw_what;
 static volatile int redraw_ms; // how long the last one took
@@ -1280,6 +1302,7 @@ int main(void) {
 	unsigned last = 0, queued = 0;
 	int live_seen = -1;
 	read_buttons();
+	engram_state = engram_installed();
 	bool threaded = redraw_start(); // (without it, redraws happen here as they used to)
 	live_start(LIVE, PROJECT_COUNT);
 	updater = update_is_updater();
@@ -1453,6 +1476,7 @@ int main(void) {
 					result_kind = found == UPDATE_READY ? RESULT_UPDATE_READY : RESULT_NOTE;
 				} else {
 					ok = selected == MENU_INSTALL ? install() : uninstall();
+					engram_state = engram_installed();
 					result_kind = RESULT_PLUGIN;
 				}
 				downloading = false;
@@ -1481,7 +1505,7 @@ int main(void) {
 		if (redraw && redraw_state == REDRAW_IDLE) {
 			redraw_what.view = view;
 			redraw_what.selected = selected;
-			redraw_what.installed = file_exists(PLUGIN_PATH);
+			redraw_what.installed = engram_state;
 			redraw_what.ok = ok;
 			snprintf(redraw_what.perf, sizeof(redraw_what.perf), "%s", perf);
 			redraw = false;
