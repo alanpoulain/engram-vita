@@ -13,3 +13,11 @@ installer/test/*.elf
 
 # a console screenshot of the app's page, which make_mockups.py draws its designs over: take your own
 installer/design/vita_screenshot.png
+
+installer/preview/photos.js
+
+installer/test/zip_case.h
+installer/test/zip_expect.txt
+
+installer/test/photo_case.h
+installer/test/photo_expect.txt

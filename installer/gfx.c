@@ -12,15 +12,22 @@
 #define FB_BYTES 0x200000                   // 960 x 544 x 4, rounded up to the 256 KB CDRAM wants
 #define LAYER_BYTES (SCREEN_W * SCREEN_H * 4) // a multiple of 4 KB as it is
 #define LINE_H_MAX 96
+#define CELL_W 160 // room for the widest letter at the biggest size, and to its left
 
 static uint32_t *fbs[2];
 static int back;
+// The overlay and the scene made from it come in pairs: the liquid draws from
+// one pair (layers) while the next look is drawn into the other (overlay,
+// scene), and gfx_show swaps them. So the screen can be redrawn on another
+// thread without the liquid ever seeing it half done.
 static uint32_t *base, *overlay, *scene, *saved;
+static uint32_t *overlays[2], *scenes[2];
+static int drawing; // which pair is being drawn into
 static LiquidLayers layers;
 static ScePvfLibId pvf_lib;
 static ScePvfFontId fonts[2]; // by GfxFont
 static ScePvfFontId pvf_font; // the one in use
-static uint8_t line_buf[SCREEN_W * LINE_H_MAX]; // one line of text, 8 bits a pixel
+static uint8_t cell_buf[CELL_W * LINE_H_MAX]; // one letter as the library draws it, 8 bits a pixel
 
 static void *alloc_block(const char *name, SceKernelMemBlockType type, unsigned size) {
 	void *ptr = NULL;
@@ -97,17 +104,25 @@ bool gfx_init(void) {
 	fbs[0] = alloc_block("installer_fb0", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, FB_BYTES);
 	fbs[1] = alloc_block("installer_fb1", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, FB_BYTES);
 	base = alloc_block("installer_base", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, LAYER_BYTES);
-	overlay = alloc_block("installer_overlay", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, LAYER_BYTES);
-	scene = alloc_block("installer_scene", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, LAYER_BYTES);
+	overlays[0] = alloc_block("installer_overlay0", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, LAYER_BYTES);
+	overlays[1] = alloc_block("installer_overlay1", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, LAYER_BYTES);
+	scenes[0] = alloc_block("installer_scene0", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, LAYER_BYTES);
+	scenes[1] = alloc_block("installer_scene1", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, LAYER_BYTES);
 	saved = alloc_block("installer_saved", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, LAYER_BYTES);
-	if (!fbs[0] || !fbs[1] || !base || !overlay || !scene || !saved)
+	if (!fbs[0] || !fbs[1] || !base || !overlays[0] || !overlays[1] || !scenes[0] || !scenes[1] || !saved)
 		return false;
-	layers.base = base;
-	layers.overlay = overlay;
-	layers.scene = scene;
 	draw_base();
-	memset(overlay, 0, LAYER_BYTES);
-	memcpy(scene, base, LAYER_BYTES);
+	for (int i = 0; i < 2; i++) {
+		memset(overlays[i], 0, LAYER_BYTES);
+		memcpy(scenes[i], base, LAYER_BYTES);
+	}
+	// the first pair is on screen, the second is drawn into
+	layers.base = base;
+	layers.overlay = overlays[0];
+	layers.scene = scenes[0];
+	drawing = 1;
+	overlay = overlays[1];
+	scene = scenes[1];
 
 	sceSysmoduleLoadModule(SCE_SYSMODULE_PGF); // the font library, libpvf
 	ScePvfInitRec rec;
@@ -155,6 +170,14 @@ void gfx_restore(void) {
 	memcpy(overlay, saved, LAYER_BYTES);
 }
 
+void gfx_show(void) {
+	layers.overlay = overlay;
+	layers.scene = scene;
+	drawing ^= 1;
+	overlay = overlays[drawing];
+	scene = scenes[drawing];
+}
+
 void gfx_end(void) {
 	for (int p = 0; p < SCREEN_W * SCREEN_H; p++) {
 		uint32_t o = overlay[p], b = base[p];
@@ -171,9 +194,21 @@ void gfx_end(void) {
 	}
 }
 
+// The rows drawing is kept to, as pixel numbers: all of them, unless gfx_clip_rows says otherwise.
+static int clip_from, clip_to = SCREEN_W * SCREEN_H;
+
+void gfx_clip_rows(int top, int bottom) {
+	if (top < 0)
+		top = 0;
+	if (bottom > SCREEN_H)
+		bottom = SCREEN_H;
+	clip_from = top * SCREEN_W;
+	clip_to = bottom * SCREEN_W;
+}
+
 // rgb at alpha a (0 to 255) over the overlay's pixel p, which is premultiplied.
 static inline void over_px(int p, uint32_t rgb, int a) {
-	if (a <= 0)
+	if (a <= 0 || p < clip_from || p >= clip_to)
 		return;
 	if (a > 255)
 		a = 255;
@@ -215,6 +250,33 @@ void gfx_panel(int x, int y, int w, int h, int radius, uint32_t rgb, int alpha) 
 		}
 }
 
+void gfx_image(int x, int y, int w, int h, int radius, const uint8_t *rgb) {
+	float cx = (float)x + (float)w * 0.5f, cy = (float)y + (float)h * 0.5f;
+	for (int j = 0; j < h; j++) {
+		int sy = y + j;
+		if (sy < 0 || sy >= SCREEN_H || sy * SCREEN_W < clip_from || sy * SCREEN_W >= clip_to)
+			continue;
+		const uint8_t *row = rgb + (size_t)j * (size_t)w * 3;
+		// only the rows the corners are in need the distance worked out
+		bool corner = j < radius || j >= h - radius;
+		for (int i = 0; i < w; i++) {
+			int sx = x + i;
+			if (sx < 0 || sx >= SCREEN_W)
+				continue;
+			int alpha = 255;
+			if (corner && (i < radius || i >= w - radius)) {
+				float d = inside_rounded((float)sx + 0.5f, (float)sy + 0.5f, cx, cy, (float)w * 0.5f, (float)h * 0.5f,
+				                         (float)radius);
+				if (d <= -0.5f)
+					continue;
+				if (d < 0.5f)
+					alpha = (int)(255.0f * (d + 0.5f));
+			}
+			over_px(sy * SCREEN_W + sx, RGB(row[i * 3], row[i * 3 + 1], row[i * 3 + 2]), alpha);
+		}
+	}
+}
+
 void gfx_dot(int cx, int cy, int radius, uint32_t rgb, int alpha) {
 	for (int j = cy - radius - 1; j <= cy + radius + 1; j++)
 		for (int i = cx - radius - 1; i <= cx + radius + 1; i++) {
@@ -227,67 +289,138 @@ void gfx_dot(int cx, int cy, int radius, uint32_t rgb, int alpha) {
 		}
 }
 
+// ---- letters ----
+// The font library draws a letter from its outline every time it is asked,
+// which is far too slow to do for every letter on every redraw. So each letter
+// is drawn once at each size it is used at and its picture kept, with how far
+// it moves the pen.
+typedef struct {
+	uint16_t key_size; // quarter pixels; 0 for a free slot
+	uint8_t key_font, key_char;
+	int8_t left, top; // where its picture goes from the pen and the line's top
+	uint8_t w, h;
+	int16_t advance64;
+	uint8_t *bits; // w x h, 8 bits a pixel; NULL for a letter with nothing to draw
+} Glyph;
+
+#define GLYPHS 4096 // slots: far more than the letters and sizes the app uses
+static Glyph glyphs[GLYPHS];
+static int glyph_count;
+
+static const Glyph *glyph_get(float size, unsigned char ch) {
+	static Glyph scratch; // for when the table is full: drawn afresh each time, as before
+	int font = pvf_font == fonts[FONT_TITLE] && fonts[FONT_TITLE] != fonts[FONT_TEXT] ? 1 : 0;
+	unsigned key_size = (unsigned)(size * 4.0f + 0.5f);
+	unsigned slot = (ch * 31u + key_size * 131u + (unsigned)font * 7919u) % GLYPHS;
+	Glyph *g = NULL;
+	for (int tries = 0; tries < GLYPHS; tries++, slot = (slot + 1) % GLYPHS) {
+		g = &glyphs[slot];
+		if (!g->key_size)
+			break;
+		if (g->key_size == key_size && g->key_font == font && g->key_char == ch)
+			return g;
+	}
+	if (glyph_count >= GLYPHS * 3 / 4) {
+		free(scratch.bits);
+		g = &scratch;
+	} else {
+		glyph_count++;
+	}
+	memset(g, 0, sizeof(*g));
+	g->key_size = (uint16_t)key_size;
+	g->key_font = (uint8_t)font;
+	g->key_char = ch;
+
+	scePvfSetCharSize(pvf_font, size, size);
+	ScePvfCharInfo info;
+	memset(&info, 0, sizeof(info));
+	if (scePvfGetCharInfo(pvf_font, ch, &info) < 0)
+		return g; // a letter the font doesn't have: nothing, and no width
+	g->advance64 = (int16_t)info.glyphMetrics.horizontalAdvance64;
+	if (ch == ' ')
+		return g;
+	// drawn into a cell with room to the pen's left, for letters that reach back
+	int line_h = (int)(size * 1.5f) + 2, pad = (int)size / 2 + 2;
+	if (line_h > LINE_H_MAX)
+		line_h = LINE_H_MAX;
+	int cell_w = pad + (int)size * 2 + 8;
+	if (cell_w > CELL_W)
+		cell_w = CELL_W;
+	memset(cell_buf, 0, (size_t)(CELL_W * line_h));
+	ScePvfUserImageBufferRec image;
+	memset(&image, 0, sizeof(image));
+	image.pixelFormat = SCE_PVF_USERIMAGE_DIRECT8;
+	image.xPos64 = pad * 64;
+	image.yPos64 = (int)(size * 1.12f) * 64;
+	image.rect.width = cell_w;
+	image.rect.height = line_h;
+	image.bytesPerLine = CELL_W;
+	image.buffer = cell_buf;
+	scePvfGetCharGlyphImage(pvf_font, ch, &image);
+	// the part of the cell it drew on
+	int x0 = cell_w, x1 = -1, y0 = line_h, y1 = -1;
+	for (int j = 0; j < line_h; j++)
+		for (int i = 0; i < cell_w; i++)
+			if (cell_buf[j * CELL_W + i]) {
+				if (i < x0)
+					x0 = i;
+				if (i > x1)
+					x1 = i;
+				if (j < y0)
+					y0 = j;
+				if (j > y1)
+					y1 = j;
+			}
+	if (x1 < 0)
+		return g;
+	int w = x1 - x0 + 1, h = y1 - y0 + 1;
+	g->bits = malloc((size_t)(w * h));
+	if (!g->bits)
+		return g;
+	for (int j = 0; j < h; j++)
+		memcpy(g->bits + j * w, cell_buf + (y0 + j) * CELL_W + x0, (size_t)w);
+	g->w = (uint8_t)w;
+	g->h = (uint8_t)h;
+	g->left = (int8_t)(x0 - pad);
+	g->top = (int8_t)y0;
+	return g;
+}
+
 int gfx_text_width(float size, const char *s) {
 	if (!pvf_font)
 		return 0;
-	scePvfSetCharSize(pvf_font, size, size);
 	int pen64 = 0;
-	for (const unsigned char *c = (const unsigned char *)s; *c; c++) {
-		ScePvfCharInfo info;
-		memset(&info, 0, sizeof(info));
-		if (scePvfGetCharInfo(pvf_font, *c, &info) >= 0)
-			pen64 += info.glyphMetrics.horizontalAdvance64;
-	}
+	for (const unsigned char *c = (const unsigned char *)s; *c; c++)
+		pen64 += glyph_get(size, *c)->advance64;
 	return (pen64 + 63) / 64;
 }
-
-#define TEXT_PAD 2 // room to the left of the pen, for letters that reach back
 
 int gfx_text(int x, int y, float size, uint32_t rgb, int alpha, const char *s) {
 	if (!pvf_font || !s[0])
 		return 0;
-	int width = gfx_text_width(size, s);
-	int line_h = (int)(size * 1.5f) + 2;
-	if (line_h > LINE_H_MAX)
-		line_h = LINE_H_MAX;
-	int span = width + (int)size + 2 * TEXT_PAD;
-	if (span > SCREEN_W)
-		span = SCREEN_W;
-	for (int j = 0; j < line_h; j++)
-		memset(line_buf + j * SCREEN_W, 0, span);
-	scePvfSetCharSize(pvf_font, size, size);
-	int pen64 = TEXT_PAD * 64, base64 = (int)(size * 1.12f) * 64;
-	for (const unsigned char *c = (const unsigned char *)s; *c && pen64 < span * 64; c++) {
-		ScePvfCharInfo info;
-		memset(&info, 0, sizeof(info));
-		if (scePvfGetCharInfo(pvf_font, *c, &info) < 0)
-			continue;
-		if (*c != ' ') {
-			ScePvfUserImageBufferRec image;
-			memset(&image, 0, sizeof(image));
-			image.pixelFormat = SCE_PVF_USERIMAGE_DIRECT8;
-			image.xPos64 = pen64;
-			image.yPos64 = base64;
-			image.rect.width = span;
-			image.rect.height = line_h;
-			image.bytesPerLine = SCREEN_W;
-			image.buffer = line_buf;
-			scePvfGetCharGlyphImage(pvf_font, *c, &image);
+	// a line wholly outside the rows being drawn (scrolled out of its space): only its width is wanted
+	if ((y + LINE_H_MAX) * SCREEN_W <= clip_from || y * SCREEN_W >= clip_to)
+		return gfx_text_width(size, s);
+	int pen64 = 0;
+	for (const unsigned char *c = (const unsigned char *)s; *c; c++) {
+		const Glyph *g = glyph_get(size, *c);
+		if (g->bits) {
+			int gx = x + ((pen64 + 32) >> 6) + g->left, gy = y + g->top;
+			for (int j = 0; j < g->h; j++) {
+				int sy = gy + j;
+				if (sy < 0 || sy >= SCREEN_H)
+					continue;
+				const uint8_t *row = g->bits + j * g->w;
+				for (int i = 0; i < g->w; i++) {
+					int sx = gx + i;
+					if (row[i] && sx >= 0 && sx < SCREEN_W)
+						over_px(sy * SCREEN_W + sx, rgb, (row[i] * alpha) / 255);
+				}
+			}
 		}
-		pen64 += info.glyphMetrics.horizontalAdvance64;
+		pen64 += g->advance64;
 	}
-	for (int j = 0; j < line_h; j++) {
-		int sy = y + j;
-		if (sy < 0 || sy >= SCREEN_H)
-			continue;
-		const uint8_t *row = line_buf + j * SCREEN_W;
-		for (int i = 0; i < span; i++) {
-			int sx = x - TEXT_PAD + i;
-			if (row[i] && sx >= 0 && sx < SCREEN_W)
-				over_px(sy * SCREEN_W + sx, rgb, (row[i] * alpha) / 255);
-		}
-	}
-	return width;
+	return (pen64 + 63) / 64;
 }
 
 int gfx_text_shadow(int x, int y, float size, uint32_t rgb, const char *s) {

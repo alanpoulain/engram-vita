@@ -13,7 +13,7 @@ include("${VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "Engram Installer")
 set(VITA_TITLEID "ENGR00001")
-set(VITA_VERSION "01.50")
+set(VITA_VERSION "01.60")
 
 # The engram.suprx the VPK carries: Engram's own build, next door.
 set(ENGRAM_SUPRX "${CMAKE_CURRENT_SOURCE_DIR}/../build/engram.suprx" CACHE FILEPATH "engram.suprx to bundle")
@@ -39,8 +39,8 @@ if(UPDATE_TEST_TAG AND UPDATE_TEST_HAVE)
   set(ENGRAM_VERSION "${UPDATE_TEST_HAVE}")
 endif()
 
-add_executable(engram_installer main.c gfx.c liquid.c files.c net.c sha256.c sha1.c headbin.c package.c unzip.c
-               update.c)
+add_executable(engram_installer main.c gfx.c liquid.c files.c net.c json.c sha256.c sha1.c headbin.c package.c unzip.c
+               update.c projects.c lookup.c png.c live.c)
 target_compile_definitions(engram_installer PRIVATE ENGRAM_VERSION="${ENGRAM_VERSION}")
 if(UPDATE_TEST_TAG)
   target_compile_definitions(engram_installer PRIVATE UPDATE_TEST_TAG="${UPDATE_TEST_TAG}")
@@ -58,6 +58,7 @@ target_link_libraries(engram_installer
   SceLibKernel_stub
   SceKernelThreadMgr_stub
   SceAppMgr_stub
+  SceAppUtil_stub
   SceNet_stub
   SceNetCtl_stub
   SceHttp_stub
@@ -84,6 +85,9 @@ vita_create_vpk(engram_installer.vpk ${VITA_TITLEID} eboot.bin
   NAME ${VITA_APP_NAME}
   FILE ${ENGRAM_SUPRX} engram.suprx
   FILE ${UPDATER_SFO} updater/param.sfo
+  # the other projects' own bubble pictures, for their emblems (make_photos.py makes them)
+  FILE icons/cyberflow_48.rgb icons/cyberflow_48.rgb
+  FILE icons/cyberflow_34.rgb icons/cyberflow_34.rgb
   # the fonts the app's text is in (SIL Open Font License: the licence goes with them)
   FILE font/Poppins-Regular.ttf font/Poppins-Regular.ttf
   FILE font/OFL-Poppins.txt font/OFL-Poppins.txt

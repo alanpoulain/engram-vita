@@ -12,7 +12,7 @@ static inline uint32_t u32(const uint8_t *p) {
 	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-uint32_t zip_crc32(const uint8_t *data, uint32_t len) {
+uint32_t zip_crc32_add(uint32_t crc, const uint8_t *data, uint32_t len) {
 	static uint32_t table[256];
 	if (!table[1])
 		for (uint32_t i = 0; i < 256; i++) {
@@ -21,10 +21,14 @@ uint32_t zip_crc32(const uint8_t *data, uint32_t len) {
 				c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
 			table[i] = c;
 		}
-	uint32_t crc = 0xFFFFFFFFu;
+	crc ^= 0xFFFFFFFFu;
 	for (uint32_t i = 0; i < len; i++)
 		crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
 	return crc ^ 0xFFFFFFFFu;
+}
+
+uint32_t zip_crc32(const uint8_t *data, uint32_t len) {
+	return zip_crc32_add(0, data, len);
 }
 
 // ---- the list of files ----
@@ -35,42 +39,53 @@ uint32_t zip_crc32(const uint8_t *data, uint32_t len) {
 #define END_SIZE 22
 #define CENTRAL_SIZE 46
 #define LOCAL_SIZE 30
+#define COMMENT_MAX 0xFFFF
 
-int zip_entries(const uint8_t *zip, uint32_t len, ZipEntry *out, int max) {
-	if (len < END_SIZE)
+// Where the end record is in the last tail_len bytes of a zip, or -1. It is
+// the last thing in the file, but for a comment of up to 64 KB.
+static int find_end(const uint8_t *tail, uint32_t tail_len) {
+	if (tail_len < END_SIZE)
 		return -1;
-	// The end record is the last thing in the file, but for a comment of up to 64 KB.
-	uint32_t end = len - END_SIZE, stop = len > END_SIZE + 0xFFFF ? len - END_SIZE - 0xFFFF : 0;
-	while (u32(zip + end) != END_SIG) {
-		if (end == stop)
+	for (uint32_t at = tail_len - END_SIZE;; at--) {
+		if (u32(tail + at) == END_SIG)
+			return (int)at;
+		if (at == 0)
 			return -1;
-		end--;
 	}
-	uint32_t count = u16(zip + end + 10), dir_size = u32(zip + end + 12), dir = u32(zip + end + 16);
-	if (u16(zip + end + 4) || u16(zip + end + 6) || count != u16(zip + end + 8))
-		return -1; // in several parts
-	if (count == 0xFFFF || dir == 0xFFFFFFFFu || dir > end || dir_size > end - dir)
-		return -1; // zip64, or a directory that isn't where it says
+}
+
+// What the end record says of the directory. False for a zip in several parts, or a zip64.
+static bool read_end(const uint8_t *end, uint32_t *count, uint32_t *dir_size, uint32_t *dir) {
+	*count = u16(end + 10);
+	*dir_size = u32(end + 12);
+	*dir = u32(end + 16);
+	if (u16(end + 4) || u16(end + 6) || *count != u16(end + 8))
+		return false;
+	return *count != 0xFFFF && *dir != 0xFFFFFFFFu;
+}
+
+// The directory's entries, their names pointing into dir.
+static int read_directory(const uint8_t *dir, uint32_t dir_size, uint32_t count, ZipEntry *out, int max) {
 	int n = 0;
-	uint32_t at = dir;
+	uint32_t at = 0;
 	for (uint32_t i = 0; i < count; i++) {
-		if (at > end || end - at < CENTRAL_SIZE || u32(zip + at) != CENTRAL_SIG)
+		if (at > dir_size || dir_size - at < CENTRAL_SIZE || u32(dir + at) != CENTRAL_SIG)
 			return -1;
-		uint32_t flags = u16(zip + at + 8), name_len = u16(zip + at + 28);
-		uint32_t skip = name_len + u16(zip + at + 30) + u16(zip + at + 32);
-		if (end - at - CENTRAL_SIZE < skip)
+		uint32_t flags = u16(dir + at + 8), name_len = u16(dir + at + 28);
+		uint32_t skip = name_len + u16(dir + at + 30) + u16(dir + at + 32);
+		if (dir_size - at - CENTRAL_SIZE < skip)
 			return -1;
 		if (flags & 1)
 			return -1; // encrypted
 		if (n < max) {
 			ZipEntry *e = &out[n];
-			e->name = (const char *)zip + at + CENTRAL_SIZE;
+			e->name = (const char *)dir + at + CENTRAL_SIZE;
 			e->name_len = (int)name_len;
-			e->method = (int)u16(zip + at + 10);
-			e->crc = u32(zip + at + 16);
-			e->packed = u32(zip + at + 20);
-			e->size = u32(zip + at + 24);
-			e->offset = u32(zip + at + 42);
+			e->method = (int)u16(dir + at + 10);
+			e->crc = u32(dir + at + 16);
+			e->packed = u32(dir + at + 20);
+			e->size = u32(dir + at + 24);
+			e->offset = u32(dir + at + 42);
 			if (e->packed == 0xFFFFFFFFu || e->size == 0xFFFFFFFFu || e->offset == 0xFFFFFFFFu)
 				return -1; // zip64
 			n++;
@@ -80,22 +95,70 @@ int zip_entries(const uint8_t *zip, uint32_t len, ZipEntry *out, int max) {
 	return n;
 }
 
+int zip_entries(const uint8_t *zip, uint32_t len, ZipEntry *out, int max) {
+	uint32_t tail_len = len > END_SIZE + COMMENT_MAX ? END_SIZE + COMMENT_MAX : len;
+	int found = find_end(zip + len - tail_len, tail_len);
+	if (found < 0)
+		return -1;
+	uint32_t end = len - tail_len + (uint32_t)found, count, dir_size, dir;
+	if (!read_end(zip + end, &count, &dir_size, &dir) || dir > end || dir_size > end - dir)
+		return -1; // a directory that isn't where it says
+	return read_directory(zip + dir, dir_size, count, out, max);
+}
+
+int zip_file_entries(ZipRead read, void *from, uint32_t len, ZipEntry *out, int max, uint8_t **names) {
+	*names = NULL;
+	uint32_t tail_len = len > END_SIZE + COMMENT_MAX ? END_SIZE + COMMENT_MAX : len;
+	uint8_t *tail = malloc(tail_len + 1);
+	if (!tail)
+		return -1;
+	int found = read(from, len - tail_len, tail, tail_len) == (int)tail_len ? find_end(tail, tail_len) : -1;
+	uint32_t end = len - tail_len + (uint32_t)(found < 0 ? 0 : found), count = 0, dir_size = 0, dir = 0;
+	bool ok = found >= 0 && read_end(tail + found, &count, &dir_size, &dir) && dir <= end && dir_size <= end - dir;
+	free(tail);
+	if (!ok)
+		return -1;
+	uint8_t *buf = malloc(dir_size + 1);
+	if (!buf)
+		return -1;
+	int n = read(from, dir, buf, dir_size) == (int)dir_size ? read_directory(buf, dir_size, count, out, max) : -1;
+	if (n < 0) {
+		free(buf);
+		return -1;
+	}
+	*names = buf;
+	return n;
+}
+
 // ---- inflate: RFC 1951 ----
 // Codes are read a bit at a time against counts of codes per length, which is
-// slow but small, and a VPK's files are small.
+// slow but small. What comes out goes through a 32 KB window, the furthest
+// back a copy can reach, and is handed on a windowful at a time, so a file of
+// any size unpacks in the same memory.
 
 #define MAX_BITS 15
 #define MAX_LITERALS 286
 #define MAX_DISTANCES 30
+#define WINDOW 32768u
+#define IN_BUF (64 * 1024)
 
 typedef struct {
+	// what goes in: a buffer, filled again from the zip when it runs out
 	const uint8_t *in;
 	uint32_t in_len, in_pos;
+	ZipRead read; // NULL when all of it is in the buffer already
+	void *from;
+	uint8_t *in_buf;
+	uint32_t file_at, file_left;
 	uint32_t bit_buf;
 	int bit_count;
-	uint8_t *out;
+	// what comes out
+	uint8_t *window;
 	uint32_t out_len, out_pos;
-	bool bad; // ran out of input, or the data makes no sense
+	ZipWrite write;
+	void *to;
+	uint32_t crc;
+	bool bad; // ran out of input, the data makes no sense, or it couldn't be written
 } Inflate;
 
 typedef struct {
@@ -103,14 +166,52 @@ typedef struct {
 	uint16_t symbol[MAX_LITERALS + 2]; // symbols in order of code
 } Huffman;
 
+static bool refill(Inflate *s) {
+	if (!s->read || !s->file_left)
+		return false;
+	uint32_t want = s->file_left < IN_BUF ? s->file_left : IN_BUF;
+	if (s->read(s->from, s->file_at, s->in_buf, want) != (int)want)
+		return false;
+	s->file_at += want;
+	s->file_left -= want;
+	s->in = s->in_buf;
+	s->in_len = want;
+	s->in_pos = 0;
+	return true;
+}
+
+static inline uint32_t next_byte(Inflate *s) {
+	if (s->in_pos >= s->in_len && !refill(s)) {
+		s->bad = true;
+		return 0;
+	}
+	return s->in[s->in_pos++];
+}
+
+static void hand_on(Inflate *s, uint32_t n) {
+	s->crc = zip_crc32_add(s->crc, s->window, n);
+	if (n && !s->write(s->to, s->window, n))
+		s->bad = true;
+}
+
+static inline void emit(Inflate *s, uint8_t byte) {
+	if (s->out_pos >= s->out_len) {
+		s->bad = true;
+		return;
+	}
+	s->window[s->out_pos & (WINDOW - 1)] = byte;
+	s->out_pos++;
+	if (!(s->out_pos & (WINDOW - 1)))
+		hand_on(s, WINDOW);
+}
+
 static uint32_t bits(Inflate *s, int need) {
 	uint32_t value = s->bit_buf;
 	while (s->bit_count < need) {
-		if (s->in_pos >= s->in_len) {
-			s->bad = true;
+		uint32_t byte = next_byte(s);
+		if (s->bad)
 			return 0;
-		}
-		value |= (uint32_t)s->in[s->in_pos++] << s->bit_count;
+		value |= byte << s->bit_count;
 		s->bit_count += 8;
 	}
 	s->bit_buf = value >> need;
@@ -177,11 +278,9 @@ static void codes(Inflate *s, const Huffman *len_code, const Huffman *dist_code)
 		if (s->bad)
 			return;
 		if (sym < 256) {
-			if (s->out_pos >= s->out_len) {
-				s->bad = true;
+			emit(s, (uint8_t)sym);
+			if (s->bad)
 				return;
-			}
-			s->out[s->out_pos++] = (uint8_t)sym;
 			continue;
 		}
 		if (sym == 256)
@@ -205,31 +304,31 @@ static void codes(Inflate *s, const Huffman *len_code, const Huffman *dist_code)
 			return;
 		}
 		// a byte at a time: the copy may run into what it is writing
-		for (uint32_t i = 0; i < len; i++, s->out_pos++)
-			s->out[s->out_pos] = s->out[s->out_pos - dist];
+		for (uint32_t i = 0; i < len && !s->bad; i++)
+			emit(s, s->window[(s->out_pos - dist) & (WINDOW - 1)]);
+		if (s->bad)
+			return;
 	}
 }
 
 static void fixed_block(Inflate *s) {
-	static Huffman len_code, dist_code;
-	static bool built;
-	if (!built) {
-		uint8_t length[288];
-		int sym = 0;
-		for (; sym < 144; sym++)
-			length[sym] = 8;
-		for (; sym < 256; sym++)
-			length[sym] = 9;
-		for (; sym < 280; sym++)
-			length[sym] = 7;
-		for (; sym < 288; sym++)
-			length[sym] = 8;
-		construct(&len_code, length, 288);
-		for (sym = 0; sym < MAX_DISTANCES; sym++)
-			length[sym] = 5;
-		construct(&dist_code, length, MAX_DISTANCES);
-		built = true;
-	}
+	// (built each time: such blocks are rare, and nothing is shared between
+	// two threads unpacking at once)
+	Huffman len_code, dist_code;
+	uint8_t length[288];
+	int sym = 0;
+	for (; sym < 144; sym++)
+		length[sym] = 8;
+	for (; sym < 256; sym++)
+		length[sym] = 9;
+	for (; sym < 280; sym++)
+		length[sym] = 7;
+	for (; sym < 288; sym++)
+		length[sym] = 8;
+	construct(&len_code, length, 288);
+	for (sym = 0; sym < MAX_DISTANCES; sym++)
+		length[sym] = 5;
+	construct(&dist_code, length, MAX_DISTANCES);
 	codes(s, &len_code, &dist_code);
 }
 
@@ -303,47 +402,69 @@ static void dynamic_block(Inflate *s) {
 static void stored_block(Inflate *s) {
 	s->bit_buf = 0; // what's left of the byte isn't used
 	s->bit_count = 0;
-	if (s->in_len - s->in_pos < 4) {
+	uint32_t len = next_byte(s);
+	len |= next_byte(s) << 8;
+	uint32_t check = next_byte(s);
+	check |= next_byte(s) << 8;
+	if (s->bad || len != (~check & 0xFFFFu) || len > s->out_len - s->out_pos) {
 		s->bad = true;
 		return;
 	}
-	uint32_t len = u16(s->in + s->in_pos), check = u16(s->in + s->in_pos + 2);
-	s->in_pos += 4;
-	if (len != (~check & 0xFFFFu) || len > s->in_len - s->in_pos || len > s->out_len - s->out_pos) {
-		s->bad = true;
-		return;
-	}
-	memcpy(s->out + s->out_pos, s->in + s->in_pos, len);
-	s->in_pos += len;
-	s->out_pos += len;
+	for (uint32_t i = 0; i < len && !s->bad; i++)
+		emit(s, (uint8_t)next_byte(s));
 }
 
-// Unpacks in to exactly out_len bytes of out.
-static bool inflate(const uint8_t *in, uint32_t in_len, uint8_t *out, uint32_t out_len) {
+// Unpacks what s reads to exactly out_len bytes, handed to its write. True
+// if that worked; s->crc is then the CRC of what came out.
+static bool inflate(Inflate *s) {
+	s->window = malloc(WINDOW);
+	if (!s->window)
+		return false;
+	uint32_t last;
+	do {
+		last = bits(s, 1);
+		uint32_t type = bits(s, 2);
+		if (s->bad)
+			break;
+		if (type == 0)
+			stored_block(s);
+		else if (type == 1)
+			fixed_block(s);
+		else if (type == 2)
+			dynamic_block(s);
+		else
+			s->bad = true;
+	} while (!last && !s->bad);
+	if (!s->bad)
+		hand_on(s, s->out_pos & (WINDOW - 1)); // the last, part-full window
+	free(s->window);
+	return !s->bad && s->out_pos == s->out_len;
+}
+
+// ---- a file, from a zip in memory ----
+
+typedef struct {
+	uint8_t *out;
+	uint32_t at;
+} Grow;
+
+static bool write_memory(void *to, const uint8_t *buf, uint32_t len) {
+	Grow *g = to;
+	memcpy(g->out + g->at, buf, len);
+	g->at += len;
+	return true;
+}
+
+bool zip_inflate(const uint8_t *in, uint32_t in_len, uint8_t *out, uint32_t out_len) {
+	Grow grow = {out, 0};
 	Inflate s;
 	memset(&s, 0, sizeof(s));
 	s.in = in;
 	s.in_len = in_len;
-	s.out = out;
 	s.out_len = out_len;
-	uint32_t last;
-	do {
-		last = bits(&s, 1);
-		uint32_t type = bits(&s, 2);
-		if (s.bad)
-			return false;
-		if (type == 0)
-			stored_block(&s);
-		else if (type == 1)
-			fixed_block(&s);
-		else if (type == 2)
-			dynamic_block(&s);
-		else
-			s.bad = true;
-		if (s.bad)
-			return false;
-	} while (!last);
-	return s.out_pos == out_len;
+	s.write = write_memory;
+	s.to = &grow;
+	return inflate(&s);
 }
 
 uint8_t *zip_extract(const uint8_t *zip, uint32_t len, const ZipEntry *e) {
@@ -361,12 +482,67 @@ uint8_t *zip_extract(const uint8_t *zip, uint32_t len, const ZipEntry *e) {
 		ok = e->packed == e->size;
 		if (ok)
 			memcpy(out, data, e->size);
+		ok = ok && zip_crc32(out, e->size) == e->crc;
 	} else {
-		ok = e->method == 8 && inflate(data, e->packed, out, e->size);
+		Grow grow = {out, 0};
+		Inflate s;
+		memset(&s, 0, sizeof(s));
+		s.in = data;
+		s.in_len = e->packed;
+		s.out_len = e->size;
+		s.write = write_memory;
+		s.to = &grow;
+		ok = e->method == 8 && inflate(&s) && s.crc == e->crc;
 	}
-	if (!ok || zip_crc32(out, e->size) != e->crc) {
+	if (!ok) {
 		free(out);
 		return NULL;
 	}
 	return out;
+}
+
+// ---- a file, from a zip read a piece at a time ----
+
+bool zip_file_extract(ZipRead read, void *from, uint32_t len, const ZipEntry *e, ZipWrite write, void *to) {
+	uint8_t local[LOCAL_SIZE];
+	if (e->offset > len || len - e->offset < LOCAL_SIZE || read(from, e->offset, local, LOCAL_SIZE) != LOCAL_SIZE ||
+	    u32(local) != LOCAL_SIG)
+		return false;
+	uint32_t skip = LOCAL_SIZE + u16(local + 26) + u16(local + 28);
+	if (len - e->offset < skip || len - e->offset - skip < e->packed)
+		return false;
+	uint32_t at = e->offset + skip;
+	uint8_t *buf = malloc(IN_BUF);
+	if (!buf)
+		return false;
+	bool ok = false;
+	if (e->method == 0) {
+		uint32_t crc = 0, left = e->packed == e->size ? e->size : 0;
+		ok = e->packed == e->size;
+		while (ok && left) {
+			uint32_t n = left < IN_BUF ? left : IN_BUF;
+			ok = read(from, at, buf, n) == (int)n;
+			if (ok) {
+				crc = zip_crc32_add(crc, buf, n);
+				ok = write(to, buf, n);
+			}
+			at += n;
+			left -= n;
+		}
+		ok = ok && crc == e->crc;
+	} else if (e->method == 8) {
+		Inflate s;
+		memset(&s, 0, sizeof(s));
+		s.read = read;
+		s.from = from;
+		s.in_buf = buf;
+		s.file_at = at;
+		s.file_left = e->packed;
+		s.out_len = e->size;
+		s.write = write;
+		s.to = to;
+		ok = inflate(&s) && s.crc == e->crc;
+	}
+	free(buf);
+	return ok;
 }

@@ -18,4 +18,12 @@ bool net_start(char *why, int why_size);
 char *net_get(const char *url, const char *accept, int max, int *len, void (*progress)(int got, int total), char *why,
               int why_size);
 
+// GETs url into the file at path a piece at a time, for something bigger than
+// memory. *len gets its size and digest its SHA-256, worked out as it arrives.
+// progress, if given, hears how much has arrived and can stop the download by
+// answering false. False, with the reason in why and the file deleted, if the
+// answer isn't a whole 200 of at most max bytes.
+bool net_get_file(const char *url, const char *path, unsigned max, int *len, char digest[65],
+                  bool (*progress)(int got, int total), char *why, int why_size);
+
 #endif

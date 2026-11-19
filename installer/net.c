@@ -1,5 +1,7 @@
 #include "net.h"
 
+#include <psp2/io/fcntl.h>
+#include <psp2/kernel/threadmgr.h>
 #include <psp2/libssl.h>
 #include <psp2/net/http.h>
 #include <psp2/net/net.h>
@@ -10,6 +12,7 @@
 #include <string.h>
 
 #include "ca_certs.h"
+#include "sha256.h"
 
 #define USER_AGENT "EngramInstaller"
 #define NET_POOL (1024 * 1024)
@@ -24,6 +27,7 @@
 
 static bool started;
 static int tpl = -1;
+static bool start_once(char *why, int why_size);
 
 // The authorities of ca_certs.h, on top of the Vita's own. Its documentation
 // isn't public, so the PEM text is offered first and the DER bytes if that is
@@ -47,6 +51,16 @@ static int load_authorities(void) {
 }
 
 bool net_start(char *why, int why_size) {
+	// One thread at a time: the background lookups and an install may both get here first.
+	static volatile int busy;
+	while (__sync_lock_test_and_set(&busy, 1))
+		sceKernelDelayThread(10 * 1000);
+	bool ok = start_once(why, why_size);
+	__sync_lock_release(&busy);
+	return ok;
+}
+
+static bool start_once(char *why, int why_size) {
 	if (!started) {
 		// (each of these answers with an error if something else loaded it first, which is fine)
 		sceSysmoduleLoadModule(SCE_SYSMODULE_NET);
@@ -194,4 +208,100 @@ done:
 	if (conn >= 0)
 		sceHttpDeleteConnection(conn);
 	return buf;
+}
+
+bool net_get_file(const char *url, const char *path, unsigned max, int *len, char digest[65],
+                  bool (*progress)(int got, int total), char *why, int why_size) {
+	static char piece[128 * 1024];
+	char host[64];
+	host_of(url, host, sizeof(host));
+	bool ok = false;
+	SceUID fd = -1;
+	int conn = sceHttpCreateConnectionWithURL(tpl, url, 0);
+	int req = conn >= 0 ? sceHttpCreateRequestWithURL(conn, SCE_HTTP_METHOD_GET, url, 0) : -1;
+	if (req < 0) {
+		snprintf(why, (size_t)why_size, "Couldn't set up the request to %s (0x%08X).", host,
+		         (unsigned)(conn < 0 ? conn : req));
+		goto done;
+	}
+	int res = sceHttpSendRequest(req, NULL, 0);
+	if (res < 0) {
+		int ssl = 0;
+		unsigned detail = 0;
+		sceHttpsGetSslError(req, &ssl, &detail);
+		if (ssl || detail)
+			snprintf(why, (size_t)why_size, "Couldn't check that %s is who it says (0x%08X, %d, 0x%X).", host,
+			         (unsigned)res, ssl, detail);
+		else if (res == (int)SCE_HTTP_ERROR_TOO_LARGE_RESPONSE_HEADER)
+			snprintf(why, (size_t)why_size, "%s's answer had more headers than this app has room for.", host);
+		else
+			snprintf(why, (size_t)why_size, "Couldn't reach %s (0x%08X).", host, (unsigned)res);
+		goto done;
+	}
+	int status = 0;
+	sceHttpGetStatusCode(req, &status);
+	if (status != 200) {
+		snprintf(why, (size_t)why_size, "%s answered %d.", host, status);
+		goto done;
+	}
+	unsigned long long said = 0;
+	if (sceHttpGetResponseContentLength(req, &said) < 0)
+		said = 0;
+	if (said > max) {
+		snprintf(why, (size_t)why_size, "%s sent more than expected.", host);
+		goto done;
+	}
+	fd = sceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+	if (fd < 0) {
+		snprintf(why, (size_t)why_size, "Couldn't make %s (0x%08X).", path, (unsigned)fd);
+		goto done;
+	}
+	Sha256 sha;
+	sha256_begin(&sha);
+	unsigned got = 0;
+	for (;;) {
+		int n = sceHttpReadData(req, piece, sizeof(piece));
+		if (n < 0) {
+			snprintf(why, (size_t)why_size, "The connection to %s broke at %u MB (0x%08X).", host, got >> 20, (unsigned)n);
+			goto done;
+		}
+		if (n == 0)
+			break;
+		if (got + (unsigned)n > max) {
+			snprintf(why, (size_t)why_size, "%s sent more than expected.", host);
+			goto done;
+		}
+		sha256_add(&sha, (const uint8_t *)piece, (uint32_t)n);
+		for (int done_n = 0; done_n < n;) {
+			int w = sceIoWrite(fd, piece + done_n, (SceSize)(n - done_n));
+			if (w <= 0) {
+				snprintf(why, (size_t)why_size, "Couldn't write to %s (0x%08X). Is the memory card full?", path,
+				         (unsigned)w);
+				goto done;
+			}
+			done_n += w;
+		}
+		got += (unsigned)n;
+		if (progress && !progress((int)got, (int)said)) {
+			snprintf(why, (size_t)why_size, "Stopped.");
+			goto done;
+		}
+	}
+	if (said && got != said) {
+		snprintf(why, (size_t)why_size, "%s sent less than expected.", host);
+		goto done;
+	}
+	sha256_end(&sha, digest);
+	*len = (int)got;
+	ok = true;
+done:
+	if (fd >= 0)
+		sceIoClose(fd);
+	if (!ok && fd >= 0)
+		sceIoRemove(path);
+	if (req >= 0)
+		sceHttpDeleteRequest(req);
+	if (conn >= 0)
+		sceHttpDeleteConnection(conn);
+	return ok;
 }

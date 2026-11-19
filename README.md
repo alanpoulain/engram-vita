@@ -37,12 +37,33 @@ Settings > System > Engram
 
 ## What's new in 1.6
 
-- **Engram Installer**, an app that installs, updates and uninstalls Engram, and can update itself from GitHub. See [Install](#install).
-- **Fonts > Apps sets itself up:** giving an app a font adds Engram's line for that app to taiHEN's `config.txt`, and System Font takes it out again.
-- **Photos, Music and Camera start again** with a Live Area font set ([#3](https://github.com/chazzarchibald-ops/engram-vita/issues/3)).
-- The lock screen, status bar, boot warning and quick menu can have fonts of their own with the Live Area on System Font.
+Everything since 1.5:
 
-The [changelog](CHANGELOG.md) has the rest.
+**New**
+
+- **Engram Installer**, an app that installs, updates and uninstalls Engram for you, and updates itself from GitHub. See [Engram Installer](#engram-installer).
+- **My other projects**, in the installer: the author's other plugins and apps for the Vita, with photos, each release's notes, and an Install button.
+- **A Logging switch** in Settings.
+
+**Improved**
+
+- **Fonts > Apps sets itself up.** Giving an app a font adds Engram's line for that app to taiHEN's `config.txt`, and setting it back to System Font takes it out again. Engram keeps a copy of the config from before each change. See [Install](#install).
+- **Place fonts with the Live Area on System Font.** The lock screen, status bar, boot warning and quick menu can have fonts of their own while the rest of the home screen keeps the system font. In that setup Chinese text on the home screen uses the Japanese font's kanji, and Korean letters show as blanks.
+- **Place fonts use less memory.** They go in once a boot, and places on the same font share one copy of it. A font over 128 KB is opened from its file instead of being read into the home screen's memory.
+- **The Settings page shows under `*NPXS10016` too**, the title ID Settings has when the system or another app opens it.
+
+**Changed**
+
+- **An app with no font chosen keeps the system font.** Choose Same as Live Area for it to follow the Live Area font, as it did by default in 1.5.
+
+**Fixes**
+
+- **Photos, Music and Camera wouldn't start** with a Live Area font set ([#3](https://github.com/chazzarchibald-ops/engram-vita/issues/3)). The home screen no longer opened the system's shared fonts, which those apps rely on; Engram now opens them.
+- **Place fonts could stop changing after a quarter of an hour or so**, while the log grew by megabytes. Each new font object left a system font open until the home screen's font library was full.
+- **A place's font could come out blank** with the Live Area on System Font.
+- **A place whose font couldn't be opened showed one of the system's decorative fonts**, such as the quick menu in a script font. It now keeps the Live Area font, or the system font.
+
+The [changelog](CHANGELOG.md) has the same list with more of the detail.
 
 ## What's new in 1.5
 
@@ -233,6 +254,22 @@ How it works:
 ## Settings file
 
 Settings are saved to `ur0:data/engram/config.txt`, and the home screen picks up changes within a second, with no restart needed.
+
+## Engram Installer
+
+![Engram Installer's page on the home screen](screenshots/installer-livearea.png)
+
+`engram_installer.vpk` is an app that does the installing for you. Its menu:
+
+- **Install or update Engram** copies the plugin to `ur0:tai` and adds its lines to taiHEN's `config.txt` (steps 1 and 2 of [Install](#install)), keeping a copy of the config from before.
+- **Add the fonts** is a switch. With it on, installing also puts Poppins and Righteous, the app's own fonts, in Engram's fonts folder, to choose in its Font settings.
+- **Check for a new version** asks GitHub for the latest release. If there is a newer one, it downloads that release's installer, checks it against the SHA-256 GitHub lists, and has the Vita install it over the one running.
+- **Uninstall Engram** takes the plugin and its lines out. Your settings and fonts stay.
+- **My other projects** shows the author's other plugins and apps for the Vita, each with photos and what it does. **Download** lists a project's releases with their notes and installs the one you choose: an app through the Vita's own installer, a plugin into `ur0:tai` and taiHEN's config. Everything downloaded is checked against the SHA-256 GitHub lists for it.
+
+The photos, releases and notes in My other projects come from GitHub as you open it, and are kept in `ux0:data/engram_installer`, so they show at once the next time, and with no network.
+
+Enter and back are the Vita's own: O and X on a Japanese console, X and O elsewhere, or as "○ Button Behavior" in HENkaku Settings has them.
 
 ## Install
 

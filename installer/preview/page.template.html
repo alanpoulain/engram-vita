@@ -78,24 +78,34 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 	</header>
 
 	<div class="bezel">
-		<canvas id="screen" width="960" height="544" tabindex="0" aria-label="The installer's screen: a menu on the left, what Engram does on the right, and a ball of liquid moving behind them"></canvas>
+		<canvas id="screen" width="960" height="544" tabindex="0" aria-label="The installer's screen: a menu on the left, what Engram does or the author's other projects on the right, and a ball of liquid moving behind them"></canvas>
 	</div>
 
 	<div class="pad">
 		<button id="btn-up" type="button">Up <kbd>&uarr;</kbd></button>
 		<button id="btn-down" type="button">Down <kbd>&darr;</kbd></button>
-		<button id="btn-select" type="button">Select <kbd>Enter</kbd></button>
+		<button id="btn-select" type="button">Enter <kbd>Enter</kbd></button>
+		<button id="btn-back" type="button">Back <kbd>Backspace</kbd></button>
+		<button id="btn-left" type="button">Left <kbd>&larr;</kbd></button>
+		<button id="btn-right" type="button">Right <kbd>&rarr;</kbd></button>
+		<button id="btn-l" type="button">L <kbd>Q</kbd></button>
+		<button id="btn-r" type="button">R <kbd>E</kbd></button>
 		<button id="btn-start" type="button">START <kbd>Esc</kbd></button>
 		<span class="spacer"></span>
 		<span id="rate"></span>
+		<button id="btn-layout" type="button" aria-pressed="false">X enters, O goes back</button>
 		<button id="btn-pause" type="button">Pause</button>
 	</div>
 
-	<p class="notes">The liquid is drawn by the same code as on the Vita, carried over line for line, so the motion, colours and shading are what the console shows. <strong>The text is in the app's own two fonts,</strong> Poppins and Righteous for the name, though the Vita draws the letters with its own font library, so their spacing can differ a little. Nothing is installed from this page, and it doesn't go online: choosing Install, Uninstall or Check for a new version only shows what the app would report.</p>
+	<p class="notes"><strong>Enter and back follow the Vita's own setting:</strong> X enters and O goes back, or the other way round on a Japanese Vita or with HENkaku's O Button Behavior changed. The button beside Pause switches the preview between the two.</p>
+	<p class="notes">The liquid is drawn by the same code as on the Vita, carried over line for line, so the motion, colours and shading are what the console shows. <strong>The text is in the app's own two fonts,</strong> Poppins and Righteous for the name, though the Vita draws the letters with its own font library, so their spacing can differ a little. Nothing is installed from this page, and it doesn't go online: choosing Install, Uninstall or Check for a new version only shows what the app would report, and installing one of the other projects only shows what the app would report. On the Vita, each project's photos, releases, notes and download sizes come from GitHub as the window opens (and are kept on the memory card); here they are the ones from when this page was made, with the notes cut short.</p>
 </div>
 
 <script>
 /*LIQUID_JS*/
+</script>
+<script>
+/*PROJECT_PHOTOS*/
 </script>
 <script>
 'use strict';
@@ -110,14 +120,20 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 	const FONT = 'Poppins, "Segoe UI", "Helvetica Neue", system-ui, -apple-system, Roboto, Arial, sans-serif';
 	const TITLE_FONT = 'Righteous, ' + FONT;
 	let font = FONT;
-	const MENU_INSTALL = 0, MENU_FONTS = 1, MENU_UPDATE = 2, MENU_UNINSTALL = 3;
-	const MENU = ['Install or update Engram', 'Add the fonts', 'Check for a new version', 'Uninstall Engram', 'Exit'];
+	const MENU_INSTALL = 0, MENU_FONTS = 1, MENU_UPDATE = 2, MENU_UNINSTALL = 3, MENU_PROJECTS = 4;
+	const MENU = ['Install or update Engram', 'Add the fonts', 'Check for a new version', 'Uninstall Engram',
+		'My other projects', 'Exit'];
+	const ROW_Y = PANEL_Y + 50, ROW_H = 33, ROW_TEXT = 19;
 	let addFonts = true;
+	// Which of O and X enters: the system's setting on the Vita, a button under the screen here.
+	let circleEnters = false;
+	const enterName = () => circleEnters ? 'O' : 'X', backName = () => circleEnters ? 'X' : 'O';
 	const MENU_HELP = [
 		"Copies Engram to ur0:tai and adds it to taiHEN's config.txt. A copy of the config is kept first.",
 		"On: installing also puts Poppins and Righteous, this app's fonts, in Engram's fonts folder, to choose in its Font settings.",
 		'Asks GitHub whether a newer Engram is out. If it is, this installer can download it and update itself.',
 		'Takes Engram out of config.txt and deletes the plugin. Your settings and fonts stay.',
+		"More for the PS Vita by Engram's author. Select to see each one, and to install it from here.",
 		'Leaves without changing anything.',
 	];
 	const FEATURES = [
@@ -127,6 +143,119 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 		['App Page Animation', 'Effects as you swipe between your open apps'],
 		['Fonts', 'Your own fonts for the home screen, lock screen and apps'],
 	];
+	// name, what it is, its emblem's colour and letter, what it does, where it is
+	const PROJECTS = [
+		['Tweaks/Plugins', 'Plugin', [0x4C, 0xD9, 0xA4], 'T',
+			"Brings your plugins' settings pages together in one Tweaks/Plugins menu in Settings.",
+			'github.com/chazzarchibald-ops/vita-tweaks-plugins'],
+		['CyberFlow Launcher', 'App', [0xFC, 0xE4, 0x2A], 'C',
+			"A Cyberpunk 2077 styled game launcher, built on RetroFlow's 3D coverflow library.",
+			'github.com/chazzarchibald-ops/CyberFLow-Launcher'],
+	];
+	const CARD_X = RIGHT_X + 16, CARD_W = 440, CARD_Y = PANEL_Y + 52, CARD_H = 112, CARD_GAP = 10;
+	// The projects' window: what each one does, its photos, and what can be done with it.
+	// An action: what it is, its label, and its size as GitHub lists it.
+	const DETAILS = [
+		{
+			photos: 'tweaks',
+			release: 'Tweaks/Plugins 1.0  (9 Nov 2026)', // on the Vita: looked up on GitHub as the window opens
+			what: [
+				'Adds a Tweaks/Plugins row to Settings, straight under HENkaku Settings, and moves every plugin\'s settings page into it.',
+				'Finds pages by itself: a newly installed plugin shows up the next time Settings opens.',
+				'Each page is in one place: one that has moved is taken out of where its plugin put it.',
+				'Settings keep working. Plugins still read and save their own values.',
+				'Safe: if Settings crashes right after a change, the next launch leaves Settings alone.',
+			],
+			icon: null,
+			hasData: false,
+			releases: [
+				{
+					name: 'Tweaks/Plugins 1.0', date: '9 Nov 2026', pre: false, install: '18 KB', data: '',
+					notes: [
+						[0, "First release of Tweaks/Plugins: one Settings menu for all your plugins' settings pages, right under HENkaku Settings."],
+						[3, ''],
+						[1, 'Install'],
+						[3, ''],
+						[0, '1. Download tweaks.suprx below and copy it to ur0:tai/tweaks.suprx.'],
+						[0, '2. Add it to your taiHEN config as the first line under *NPXS10015:'],
+						[0, '*NPXS10015'],
+						[0, 'ur0:tai/tweaks.suprx'],
+						[0, 'ur0:tai/henkaku.suprx'],
+						[0, '3. Reboot, or use HENkaku Settings -> Reload taiHEN config.'],
+						[3, ''],
+						[0, 'Every plugin settings page is found when Settings opens, so nothing else needs setting up. See the README for the config options and how it works.'],
+					],
+				},
+			],
+			steps: () => [
+				[COLOR_DIM, 'Downloading tweaks.suprx (18 KB)... 100%'],
+				[COLOR_GOOD, 'Its SHA-256 is the one GitHub lists.'],
+				[COLOR_GOOD, 'Copied tweaks.suprx to ur0:tai/tweaks.suprx.'],
+				[COLOR_GOOD, 'Config updated: Tweaks/Plugins is first under *NPXS10015. The old one is kept.'],
+				[COLOR_GOOD, 'Done. Restart the Vita, then open Settings.'],
+			],
+		},
+		{
+			photos: 'cyberflow',
+			release: 'CyberFlow 1.0.0 - First Release  (6 Oct 2026)',
+			what: [
+				'A Cyberpunk 2077 inspired mod of RetroFlow Launcher: its 3D coverflow and its retro game library with no bubbles needed, in a Cyberpunk 2077 interface.',
+				'Animated video backgrounds and music, different for each theme.',
+				'10 theme presets, plus Classic and a slot for your own: Arasaka, Dogtown, Night City, Edgerunners and more.',
+				'A Cyberdeck RAM header, a scanner-style game information screen, and a settings hub like the game\'s pause menu.',
+				'Everything RetroFlow does: categories, collections, favourites, search, cover downloads and 20 languages.',
+				'The data files are the themes\' videos and music. They go in ux0:data/RetroFlow.',
+			],
+			icon: 'cyberflow',
+			hasData: true,
+			releases: [
+				{
+					name: 'CyberFlow 1.0.0 - First Release', date: '6 Oct 2026', pre: false, install: '14.6 MB', data: '422 MB',
+					notes: [
+						[0, 'The first public release of CyberFlow, a Cyberpunk 2077 inspired mod of'],
+						[0, 'RetroFlow Launcher for the PS Vita. It keeps the 3D coverflow and the'],
+						[0, '"no bubbles needed" retro library of RetroFlow and wraps it in a neon'],
+						[0, 'Night City interface.'],
+						[3, ''],
+						[0, 'Highlights'],
+						[0, 'Cyberpunk 2077 UI: Rajdhani font, neon cyan/red palette, chamfered'],
+						[0, 'panels, scan lines and glitch accents throughout.'],
+						[0, 'Animated MP4 backgrounds per theme, with matching looping soundtracks.'],
+						[0, '10 themes plus Classic and Custom: Arasaka, Dogtown, Night City,'],
+						[0, 'Ending, Main Theme, Mikoshi, Alt Cunningham, Just Another Weapon'],
+						[0, '(Phantom Liberty), Nocturne OP55N1 and Edgerunners, each with a live'],
+						[0, 'preview and thumbnail.'],
+					],
+				},
+			],
+			steps: () => [
+				[COLOR_DIM, 'Downloading CyberFlow_1.0.0.vpk (14.6 MB)... 100%'],
+				[COLOR_GOOD, 'Its SHA-256 is the one GitHub lists.'],
+				[COLOR_GOOD, 'Installed CyberFlow Launcher. Its bubble is on the home screen.'],
+			].concat(dataFiles ? [
+				[COLOR_DIM, 'Downloading CyberFlow_data.zip (422 MB)... 100%'],
+				[COLOR_GOOD, 'Its SHA-256 is the one GitHub lists.'],
+				[COLOR_GOOD, 'Extracted 33 files to ux0:data/RetroFlow.'],
+				[COLOR_GOOD, 'Done.'],
+			] : [
+				[COLOR_TEXT, 'The data files were left out: the themes\' videos and music.'],
+				[COLOR_GOOD, 'Done.'],
+			]),
+		},
+	];
+	const WIN_Y = 84, WIN_H = 364, LIST_X = 32, LIST_W = 250, SIDE_X = 298, SIDE_W = 630;
+	const VIEW_X = SIDE_X + 16, VIEW_W = 598, VIEW_Y = WIN_Y + 14, VIEW_H = 284; // what scrolls
+	const PHOTO_W = 448, PHOTO_H = 254, BUTTON_Y = WIN_Y + WIN_H - 54, BUTTON_H = 40;
+	let dataFiles = true;
+	const photoImages = {};
+	if (typeof PHOTO_URIS !== 'undefined')
+		for (const key of Object.keys(PHOTO_URIS))
+			photoImages[key] = PHOTO_URIS[key].map((uri) => {
+				const im = new Image();
+				im.onload = () => { if (view === VIEW_WINDOW) { renderUi(); if (!running) draw(0); } };
+				im.src = uri;
+				return im;
+			});
 	const LOGS = [
 		[
 			[COLOR_GOOD, 'Copied engram.suprx (60967 bytes) to ur0:tai/engram.suprx.'],
@@ -150,7 +279,7 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 		if (selected === MENU_UPDATE)
 			return [
 				[COLOR_DIM, 'Asking GitHub for the latest release...'],
-				[COLOR_GOOD, 'This installer has the latest Engram (1.5).'],
+				[COLOR_GOOD, 'This installer has the latest Engram (1.6).'],
 			];
 		if (selected !== MENU_INSTALL)
 			return LOGS[1];
@@ -294,11 +423,274 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 
 	// ---- main.c's render_ui ----
 
-	const VIEW_MENU = 0, VIEW_WORKING = 1, VIEW_RESULT = 2;
-	let view = VIEW_MENU, selected = 0, installed = false, workingFrames = 0;
+	const VIEW_MENU = 0, VIEW_WORKING = 1, VIEW_RESULT = 2, VIEW_WINDOW = 3;
+	// (the preview opens on the newest row, My other projects; the app opens on the first)
+	let view = VIEW_MENU, selected = MENU_PROJECTS, installed = false, workingFrames = 0, project = 0, opened = false;
+	// In the window: which side the buttons act on, the chosen action, how far the right side is
+	// scrolled, the photo showing, and an install under way (its lines, and how many are up).
+	let side = false, action = 0, scroll = 0, scrollMax = 0, photo = 0, job = null;
+	// Behind a project's Download button: its releases. The one chosen, and the same of its right side.
+	let level = 0, rel = 0, relAction = 0, relScroll = 0, relScrollMax = 0;
+	const iconImages = {};
+	if (typeof ICON_URIS !== 'undefined')
+		for (const key of Object.keys(ICON_URIS)) {
+			iconImages[key] = new Image();
+			iconImages[key].onload = () => { renderUi(); if (!running) draw(0); };
+			iconImages[key].src = ICON_URIS[key];
+		}
+
+	// The buttons of the right side showing: a project's, or a release's.
+	function windowButtons() {
+		const detail = DETAILS[project];
+		if (level === 0)
+			return [['download', 'Download', ''], ['page', 'Open its page', '']];
+		const r = detail.releases[rel];
+		if (!r)
+			return [];
+		const list = [];
+		if (r.install) {
+			list.push(['install', 'Install', r.install]);
+			if (detail.hasData && r.data)
+				list.push(['data', 'Data files: ' + (dataFiles ? 'On' : 'Off'), r.data]);
+		}
+		list.push(['releasePage', 'Open release page', '']);
+		return list;
+	}
+	let hits = []; // where the window's names and buttons are, for clicks
+
+	// A pretend install: its lines come up one at a time.
+	function startJob(lines) {
+		const mine = job = { lines, shown: 1 };
+		const timer = setInterval(() => {
+			if (job !== mine || mine.shown >= lines.length) {
+				clearInterval(timer);
+				return;
+			}
+			mine.shown++;
+			renderUi();
+			if (!running)
+				draw(0);
+		}, 700);
+	}
+
+	// A project's emblem: its bubble's own picture cut to a circle, or a ball in its colour with its letter.
+	function emblem(index, cx, cy, r, size) {
+		const [, , color, letter] = PROJECTS[index];
+		const icon = iconImages[DETAILS[index].icon];
+		if (icon && icon.complete && icon.naturalWidth) {
+			tc.save();
+			tc.beginPath();
+			tc.arc(cx, cy, r, 0, Math.PI * 2);
+			tc.clip();
+			tc.drawImage(icon, cx - r, cy - r, r * 2, r * 2);
+			tc.restore();
+			return;
+		}
+		tc.fillStyle = css(color);
+		tc.beginPath();
+		tc.arc(cx, cy, r, 0, Math.PI * 2);
+		tc.fill();
+		tc.fillStyle = css([255, 255, 255], 0.3);
+		tc.beginPath();
+		tc.arc(cx - r * 0.29, cy - r * 0.33, r * 0.46, 0, Math.PI * 2);
+		tc.fill();
+		font = TITLE_FONT;
+		text(cx - textWidth(size, letter) / 2, cy - size * 0.68, size, [10, 12, 20], letter);
+		font = FONT;
+	}
+
+	function scrollBar(at, max) {
+		if (max <= 0)
+			return;
+		const total = VIEW_H + max, bar = Math.max(24, VIEW_H * VIEW_H / total);
+		tc.fillStyle = css([255, 255, 255], 0.1);
+		tc.fillRect(VIEW_X + VIEW_W + 6, VIEW_Y, 4, VIEW_H);
+		tc.fillStyle = css(COLOR_ACCENT, 0.75);
+		tc.fillRect(VIEW_X + VIEW_W + 6, VIEW_Y + (VIEW_H - bar) * at / max, 4, bar);
+	}
+
+	function fitText(s, size, width) {
+		if (textWidth(size, s) <= width)
+			return s;
+		while (s.length > 1 && textWidth(size, s + '...') > width)
+			s = s.slice(0, -1);
+		return s + '...';
+	}
+
+	// The window: names on the left; on the right something that scrolls, over its buttons, which
+	// don't. First the projects, each with a photo and what it does; behind a project's Download
+	// button, its releases, each with its notes and the buttons that install it.
+	function renderWindow() {
+		const detail = DETAILS[project], shots = photoImages[detail.photos] || [];
+		const release = level === 1 ? detail.releases[rel] : null;
+		hits = [];
+		overlay.fill(0);
+		panel(LIST_X, WIN_Y, LIST_W, WIN_H, 20, PANEL, PANEL_ALPHA);
+		panel(SIDE_X, WIN_Y, SIDE_W, WIN_H, 20, PANEL, PANEL_ALPHA);
+		panel(LEFT_X, 464, 896, 46, 14, PANEL, PANEL_ALPHA);
+		if (level === 0)
+			for (let i = 0; i < PROJECTS.length; i++) {
+				const y = WIN_Y + 16 + i * 68;
+				if (i === project)
+					panel(LIST_X + 12, y, LIST_W - 24, 58, 12, side ? RGB(255, 255, 255) : ACCENT, side ? 22 : 64);
+				hits.push(['name', i, LIST_X + 12, y, LIST_W - 24, 58]);
+			}
+		else
+			for (let i = 0; i < detail.releases.length; i++) {
+				const y = WIN_Y + 66 + i * 58;
+				if (i === rel)
+					panel(LIST_X + 12, y, LIST_W - 24, 52, 12, side ? RGB(255, 255, 255) : ACCENT, side ? 22 : 64);
+				hits.push(['name', i, LIST_X + 12, y, LIST_W - 24, 52]);
+			}
+		// the buttons, left to right
+		const buttons = windowButtons(), chosen = level === 0 ? action : relAction;
+		let bx = VIEW_X;
+		const widths = buttons.map(([, label, size]) => Math.ceil(textWidth(15, label) + (size ? textWidth(12.5, size) + 10 : 0) + 32));
+		buttons.forEach((b, i) => {
+			const on = side && i === chosen && !job;
+			panel(bx, BUTTON_Y, widths[i], BUTTON_H, 12, on ? ACCENT : RGB(255, 255, 255), on ? 84 : 18);
+			hits.push(['action', i, bx, BUTTON_Y, widths[i], BUTTON_H]);
+			bx += widths[i] + 10;
+		});
+
+		font = TITLE_FONT;
+		textShadow(40, 22, 36, COLOR_TEXT, 'My other projects');
+		font = FONT;
+		const version = 'Installer 1.6  -  Engram 1.6';
+		textShadow(SCREEN_W - 40 - textWidth(16, version), 42, 16, COLOR_DIM, version);
+		if (level === 0) {
+			for (let i = 0; i < PROJECTS.length; i++) {
+				const [name, kind] = PROJECTS[i];
+				const y = WIN_Y + 16 + i * 68;
+				emblem(i, LIST_X + 42, y + 29, 17, 20);
+				text(LIST_X + 68, y + 8, 15.5, i === project ? COLOR_TEXT : COLOR_DIM, name);
+				text(LIST_X + 68, y + 31, 12.5, i === project ? COLOR_ACCENT : COLOR_DIM, kind);
+			}
+		} else { // the project, and its releases under it
+			emblem(project, LIST_X + 34, WIN_Y + 32, 17, 20);
+			text(LIST_X + 60, WIN_Y + 12, 15.5, COLOR_TEXT, PROJECTS[project][0]);
+			text(LIST_X + 60, WIN_Y + 34, 12.5, COLOR_ACCENT, 'Releases');
+			detail.releases.forEach((r, i) => {
+				const y = WIN_Y + 66 + i * 58;
+				text(LIST_X + 26, y + 6, 14.5, i === rel ? COLOR_TEXT : COLOR_DIM, fitText(r.name, 14.5, LIST_W - 24 - 28));
+				text(LIST_X + 26, y + 28, 12.5, i === rel ? COLOR_ACCENT : COLOR_DIM, r.pre ? 'Pre-release' : r.date);
+			});
+		}
+
+		// the right side: what scrolls, cut off at the edges of its space
+		tc.save();
+		tc.beginPath();
+		tc.rect(VIEW_X, VIEW_Y, VIEW_W + 14, VIEW_H);
+		tc.clip();
+		if (job) {
+			text(VIEW_X + 8, VIEW_Y + 4, 16, COLOR_ACCENT, (job.shown < job.lines.length ? 'Installing ' : 'Installed ') + PROJECTS[project][0]);
+			let y = VIEW_Y + 38;
+			for (let i = 0; i < job.shown; i++)
+				y = textWrap(VIEW_X + 8, y, VIEW_W - 16, 14, 18, job.lines[i][0], job.lines[i][1]) + 4;
+		} else if (level === 0) {
+			let y = VIEW_Y - scroll;
+			const px = VIEW_X + ((VIEW_W - PHOTO_W) >> 1);
+			tc.save();
+			tc.beginPath();
+			tc.roundRect(px, y, PHOTO_W, PHOTO_H, 10);
+			tc.clip();
+			tc.fillStyle = css([24, 28, 44]);
+			tc.fillRect(px, y, PHOTO_W, PHOTO_H);
+			if (shots[photo] && shots[photo].complete && shots[photo].naturalWidth)
+				tc.drawImage(shots[photo], px, y, PHOTO_W, PHOTO_H);
+			tc.restore();
+			y += PHOTO_H + 8;
+			text(px, y, 13, COLOR_DIM, 'Photo ' + (photo + 1) + ' of ' + Math.max(shots.length, 1));
+			const more = 'L / R: more photos';
+			text(px + PHOTO_W - textWidth(13, more), y, 13, COLOR_DIM, more);
+			y += 28;
+			text(VIEW_X + 8, y, 16, COLOR_ACCENT, 'Newest release');
+			text(VIEW_X + 8 + textWidth(16, 'Newest release') + 14, y + 2, 14, COLOR_TEXT, detail.release);
+			y += 34;
+			text(VIEW_X + 8, y, 16, COLOR_ACCENT, 'What it does');
+			y += 28;
+			for (const line of detail.what) {
+				tc.fillStyle = css(COLOR_ACCENT);
+				tc.beginPath();
+				tc.arc(VIEW_X + 13, y + 10, 2.5, 0, Math.PI * 2);
+				tc.fill();
+				y = textWrap(VIEW_X + 26, y, VIEW_W - 40, 14, 19, COLOR_TEXT, line) + 6;
+			}
+			scrollMax = Math.max(0, Math.ceil(y + 6 + scroll - VIEW_Y - VIEW_H));
+			scrollBar(scroll, scrollMax);
+		} else if (release) { // its name, when it came out, and its notes
+			let y = VIEW_Y - relScroll + 2;
+			y = textWrap(VIEW_X + 8, y, VIEW_W - 16, 18, 24, COLOR_TEXT, release.name);
+			text(VIEW_X + 8, y, 13, COLOR_ACCENT, release.date + (release.pre ? '    Pre-release' : ''));
+			y += 30;
+			for (const [kind, line] of release.notes) {
+				if (kind === 3) {
+					y += 9;
+				} else if (kind === 1) {
+					y = textWrap(VIEW_X + 8, y + 5, VIEW_W - 16, 15.5, 21, COLOR_ACCENT, line) + 3;
+				} else if (kind === 2) {
+					tc.fillStyle = css(COLOR_ACCENT);
+					tc.beginPath();
+					tc.arc(VIEW_X + 13, y + 10, 2.5, 0, Math.PI * 2);
+					tc.fill();
+					y = textWrap(VIEW_X + 26, y, VIEW_W - 40, 14, 19, COLOR_TEXT, line) + 3;
+				} else {
+					y = textWrap(VIEW_X + 8, y, VIEW_W - 16, 14, 19, COLOR_TEXT, line) + 3;
+				}
+			}
+			relScrollMax = Math.max(0, Math.ceil(y + 8 + relScroll - VIEW_Y - VIEW_H));
+			scrollBar(relScroll, relScrollMax);
+		}
+		tc.restore();
+
+		bx = VIEW_X;
+		buttons.forEach(([kind, label, size], i) => {
+			const on = side && i === chosen && !job;
+			const w = text(bx + 16, BUTTON_Y + 9, 15, job ? COLOR_DIM : on ? COLOR_TEXT : kind === 'data' && !dataFiles ? COLOR_DIM : COLOR_TEXT, label);
+			if (size)
+				text(bx + 16 + w + 10, BUTTON_Y + 12, 12.5, job ? COLOR_DIM : COLOR_ACCENT, size);
+			bx += widths[i] + 10;
+		});
+
+		const photos = level === 0 ? 'L / R: photos      ' : '';
+		text(LEFT_X + 24, 476, 16, COLOR_DIM,
+			job ? (job.shown < job.lines.length ? 'One moment... Keep this app open.' : backName() + ': back')
+			: opened ? 'Opening its page in the browser...'
+				: side ? 'Left / Right: choose      Up / Down: scroll      ' + photos + enterName() + ': select      ' + backName() + ': back'
+					: 'Up / Down: choose      ' + photos + enterName() + ': its buttons      ' + backName() + ': back');
+		mergeText();
+		compose();
+		full[0] = full[1] = true;
+	}
+
+	// The other projects, in the right panel: a card each, the chosen one lit.
+	function projectCards(chosen) {
+		for (let i = 0; i < PROJECTS.length; i++)
+			panel(CARD_X, CARD_Y + i * (CARD_H + CARD_GAP), CARD_W, CARD_H, 14, i === chosen ? ACCENT : RGB(255, 255, 255),
+				i === chosen ? 64 : 14);
+	}
+
+	function projectText(chosen) {
+		text(RIGHT_X + 24, PANEL_Y + 18, 16, COLOR_ACCENT, 'My other projects');
+		const more = 'More for the PS Vita';
+		text(RIGHT_X + 448 - textWidth(13, more), PANEL_Y + 21, 13, COLOR_DIM, more);
+		for (let i = 0; i < PROJECTS.length; i++) {
+			const [name, kind, color, letter, about, where] = PROJECTS[i];
+			const x = CARD_X, y = CARD_Y + i * (CARD_H + CARD_GAP);
+			emblem(i, x + 40, y + 40, 24, 28);
+			text(x + 78, y + 12, 19, COLOR_TEXT, name);
+			text(x + CARD_W - 18 - textWidth(12.5, kind), y + 17, 12.5, COLOR_ACCENT, kind);
+			textWrap(x + 78, y + 39, CARD_W - 78 - 18, 13.5, 17, COLOR_DIM, about);
+			text(x + 18, y + 84, 13, i === chosen ? COLOR_TEXT : COLOR_ACCENT, where);
+		}
+	}
 	const full = [true, true];
 
 	function renderUi() {
+		if (view === VIEW_WINDOW) {
+			renderWindow();
+			return;
+		}
 		if (chrome) {
 			overlay.set(chrome);
 		} else {
@@ -310,15 +702,18 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 			textShadow(40, 20, 54, COLOR_TEXT, 'Engram');
 			font = FONT;
 			textShadow(44, 90, 19, COLOR_DIM, 'Home screen tweaks for the PS Vita');
-			const version = 'Installer 1.4  -  Engram 1.5';
+			const version = 'Installer 1.6  -  Engram 1.6';
 			textShadow(SCREEN_W - 40 - textWidth(16, version), 42, 16, COLOR_DIM, version);
 			mergeText();
 			chrome = overlay.slice();
 		}
 
+		const listed = view === VIEW_MENU && selected === MENU_PROJECTS;
 		for (let i = 0; i < MENU.length; i++)
 			if (i === selected && view === VIEW_MENU)
-				panel(LEFT_X + 14, PANEL_Y + 54 + i * 37 - 4, 376, 34, 11, ACCENT, 64);
+				panel(LEFT_X + 14, ROW_Y + i * ROW_H - 4, 376, 31, 11, ACCENT, 64);
+		if (listed)
+			projectCards(-1);
 
 		tc.fillStyle = css(installed ? COLOR_GOOD : COLOR_DIM);
 		tc.beginPath();
@@ -327,15 +722,17 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 		text(LEFT_X + 46, PANEL_Y + 19, 16, COLOR_DIM, installed ? 'Engram is installed' : "Engram isn't installed yet");
 		for (let i = 0; i < MENU.length; i++) {
 			const on = i === selected && view === VIEW_MENU;
-			text(LEFT_X + 32, PANEL_Y + 54 + i * 37, 20, on ? COLOR_TEXT : COLOR_DIM, MENU[i]);
+			text(LEFT_X + 32, ROW_Y + i * ROW_H, ROW_TEXT, on ? COLOR_TEXT : COLOR_DIM, MENU[i]);
 			if (i === MENU_FONTS) {
 				const state = addFonts ? 'On' : 'Off';
-				text(LEFT_X + 372 - textWidth(20, state), PANEL_Y + 54 + i * 37, 20, addFonts ? COLOR_ACCENT : COLOR_DIM, state);
+				text(LEFT_X + 372 - textWidth(ROW_TEXT, state), ROW_Y + i * ROW_H, ROW_TEXT, addFonts ? COLOR_ACCENT : COLOR_DIM, state);
 			}
 		}
-		textWrap(LEFT_X + 32, PANEL_Y + 246, 344, 15, 20, COLOR_DIM, MENU_HELP[selected]);
+		textWrap(LEFT_X + 32, PANEL_Y + 254, 344, 14, 19, COLOR_DIM, MENU_HELP[selected]);
 
-		if (view === VIEW_MENU) {
+		if (listed) {
+			projectText(-1);
+		} else if (view === VIEW_MENU) {
 			text(RIGHT_X + 24, PANEL_Y + 18, 16, COLOR_ACCENT, 'What Engram does');
 			for (let i = 0; i < FEATURES.length; i++) {
 				const y = PANEL_Y + 50 + i * 46;
@@ -353,9 +750,9 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 		}
 
 		text(LEFT_X + 24, 476, 16, COLOR_DIM,
-			view === VIEW_RESULT ? (selected === MENU_UPDATE ? 'O or X: back to the menu' : 'START: restart the Vita now        O or X: back to the menu')
+			view === VIEW_RESULT ? (selected === MENU_UPDATE ? '' : 'START: restart the Vita now        ') + backName() + ': back to the menu'
 			: view === VIEW_WORKING ? 'One moment...'
-				: 'Up / Down: choose        O or X: select        START: exit');
+				: 'Up / Down: choose        ' + enterName() + ': select        START: exit');
 		mergeText();
 		compose();
 		full[0] = full[1] = true;
@@ -374,12 +771,79 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 				selected = (selected + 1) % MENU.length;
 			else if (button === 'select' && selected === MENU_FONTS)
 				addFonts = !addFonts;
-			else if (button === 'select' && selected !== MENU.length - 1) {
+			else if ((button === 'select' || button === 'right') && selected === MENU_PROJECTS) {
+				view = VIEW_WINDOW;
+				level = 0;
+				project = 0;
+				side = opened = false;
+				action = scroll = photo = 0;
+				job = null;
+			} else if (button === 'select' && selected !== MENU.length - 1) {
 				view = VIEW_WORKING;
 				workingFrames = 0;
 			} else if (button !== 'select')
 				return;
+		} else if (view === VIEW_WINDOW) {
+			const detail = DETAILS[project], shots = (photoImages[detail.photos] || []).length || 1;
+			const buttons = windowButtons(), releases = level === 1;
+			opened = false;
+			if (job) {
+				if ((button !== 'select' && button !== 'back') || job.shown < job.lines.length)
+					return;
+				job = null;
+			} else if (!releases && (button === 'l' || button === 'r')) {
+				photo = (photo + (button === 'l' ? shots - 1 : 1)) % shots;
+			} else if (button === 'start') {
+				view = VIEW_MENU;
+			} else if (!side) { // the names
+				if ((button === 'up' || button === 'down') && !releases) {
+					project = (project + (button === 'up' ? PROJECTS.length - 1 : 1)) % PROJECTS.length;
+					action = scroll = photo = 0;
+				} else if ((button === 'up' || button === 'down') && detail.releases.length) {
+					rel = (rel + (button === 'up' ? detail.releases.length - 1 : 1)) % detail.releases.length;
+					relAction = relScroll = 0;
+				} else if ((button === 'select' || button === 'right') && buttons.length) {
+					side = true;
+				} else if (button === 'back' && releases) {
+					level = 0; // back to the project, on the button that led here
+					side = true;
+				} else if (button === 'back') {
+					view = VIEW_MENU;
+				}
+			} else if (button === 'up' || button === 'down') {
+				if (releases)
+					relScroll = Math.max(0, Math.min(relScrollMax, relScroll + (button === 'up' ? -56 : 56)));
+				else
+					scroll = Math.max(0, Math.min(scrollMax, scroll + (button === 'up' ? -56 : 56)));
+			} else if (button === 'back') {
+				side = false; // back to the names
+			} else if (button === 'left') {
+				if ((releases ? relAction : action) > 0)
+					releases ? relAction-- : action--;
+				else
+					side = false; // (the names are what is to the left of the first button)
+			} else if (button === 'right') {
+				if (releases)
+					relAction = Math.min(buttons.length - 1, relAction + 1);
+				else
+					action = Math.min(buttons.length - 1, action + 1);
+			} else if (button === 'select' && buttons.length) {
+				const kind = buttons[releases ? relAction : action][0];
+				if (kind === 'download') { // its releases
+					level = 1;
+					side = false;
+					rel = relAction = relScroll = 0;
+				} else if (kind === 'data') {
+					dataFiles = !dataFiles;
+				} else if (kind === 'page' || kind === 'releasePage') {
+					opened = true; // on the Vita: the page, in the Internet Browser
+				} else {
+					startJob(detail.steps());
+				}
+			}
 		} else if (view === VIEW_RESULT) {
+			if (button !== 'select' && button !== 'back')
+				return;
 			view = VIEW_MENU;
 		} else {
 			return;
@@ -438,10 +902,25 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 	document.getElementById('btn-up').addEventListener('click', () => press('up'));
 	document.getElementById('btn-down').addEventListener('click', () => press('down'));
 	document.getElementById('btn-select').addEventListener('click', () => press('select'));
+	document.getElementById('btn-back').addEventListener('click', () => press('back'));
+	document.getElementById('btn-layout').addEventListener('click', (e) => {
+		circleEnters = !circleEnters;
+		e.currentTarget.textContent = circleEnters ? 'O enters, X goes back' : 'X enters, O goes back';
+		e.currentTarget.setAttribute('aria-pressed', String(circleEnters));
+		renderUi();
+		if (!running)
+			draw(0);
+	});
+	document.getElementById('btn-left').addEventListener('click', () => press('left'));
+	document.getElementById('btn-right').addEventListener('click', () => press('right'));
+	document.getElementById('btn-l').addEventListener('click', () => press('l'));
+	document.getElementById('btn-r').addEventListener('click', () => press('r'));
 	document.getElementById('btn-start').addEventListener('click', () => press('start'));
 	document.getElementById('btn-pause').addEventListener('click', () => setRunning(!running));
 	document.addEventListener('keydown', (e) => {
-		const map = { ArrowUp: 'up', ArrowDown: 'down', Enter: 'select', x: 'select', o: 'select', Escape: 'start' };
+		const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', q: 'l', e: 'r', Enter: 'select', Backspace: 'back', Escape: 'start' };
+		map[circleEnters ? 'o' : 'x'] = 'select';
+		map[circleEnters ? 'x' : 'o'] = 'back';
 		const button = map[e.key];
 		if (!button || e.target.tagName === 'BUTTON' && e.key === 'Enter')
 			return;
@@ -451,13 +930,45 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 	canvas.addEventListener('click', (e) => {
 		const box = canvas.getBoundingClientRect();
 		const x = (e.clientX - box.left) * SCREEN_W / box.width, y = (e.clientY - box.top) * SCREEN_H / box.height;
+		if (view === VIEW_WINDOW) {
+			if (job) {
+				press('select');
+				return;
+			}
+			for (const [kind, i, hx, hy, hw, hh] of hits)
+				if (x >= hx && x < hx + hw && y >= hy && y < hy + hh) {
+					if (kind === 'name' && level === 0) {
+						if (project !== i)
+							action = scroll = photo = 0;
+						project = i;
+						side = opened = false;
+					} else if (kind === 'name') {
+						rel = i;
+						relAction = relScroll = 0;
+						side = opened = false;
+					} else {
+						side = true;
+						if (level === 0)
+							action = i;
+						else
+							relAction = i;
+						press('select');
+						return;
+					}
+					renderUi();
+					if (!running)
+						draw(0);
+					return;
+				}
+			return;
+		}
 		if (view !== VIEW_MENU) {
 			press('select');
 			return;
 		}
 		for (let i = 0; i < MENU.length; i++) {
-			const top = PANEL_Y + 54 + i * 37 - 4;
-			if (x >= LEFT_X + 14 && x < LEFT_X + 390 && y >= top && y < top + 34) {
+			const top = ROW_Y + i * ROW_H - 4;
+			if (x >= LEFT_X + 14 && x < LEFT_X + 390 && y >= top && y < top + 31) {
 				if (selected === i) {
 					press('select');
 				} else {

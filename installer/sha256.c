@@ -52,30 +52,60 @@ static void block(uint32_t h[8], const uint8_t *p) {
 	h[7] += hh;
 }
 
-void sha256_hex(const uint8_t *data, uint32_t len, char hex[65]) {
-	uint32_t h[8] = {0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19};
-	uint32_t whole = len & ~63u;
-	for (uint32_t at = 0; at < whole; at += 64)
-		block(h, data + at);
+void sha256_begin(Sha256 *s) {
+	static const uint32_t start[8] = {0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
+	                                  0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19};
+	memcpy(s->h, start, sizeof(start));
+	s->held = 0;
+	s->total = 0;
+}
+
+void sha256_add(Sha256 *s, const uint8_t *data, uint32_t len) {
+	s->total += len;
+	if (s->held) { // fill the block that was left part full
+		uint32_t take = 64 - s->held < len ? 64 - s->held : len;
+		memcpy(s->part + s->held, data, take);
+		s->held += take;
+		data += take;
+		len -= take;
+		if (s->held < 64)
+			return;
+		block(s->h, s->part);
+		s->held = 0;
+	}
+	for (; len >= 64; data += 64, len -= 64)
+		block(s->h, data);
+	if (len) {
+		memcpy(s->part, data, len);
+		s->held = len;
+	}
+}
+
+void sha256_end(Sha256 *s, char hex[65]) {
 	// the rest, a 1 bit, zeros, and the length in bits as 64 bits: one block or two
 	uint8_t tail[128];
-	uint32_t rest = len - whole, tail_len = rest < 56 ? 64 : 128;
+	uint32_t rest = s->held, tail_len = rest < 56 ? 64 : 128;
+	uint64_t bits = s->total * 8;
 	memset(tail, 0, sizeof(tail));
-	memcpy(tail, data + whole, rest);
+	memcpy(tail, s->part, rest);
 	tail[rest] = 0x80;
-	tail[tail_len - 5] = (uint8_t)(len >> 29);
-	tail[tail_len - 4] = (uint8_t)(len >> 21);
-	tail[tail_len - 3] = (uint8_t)(len >> 13);
-	tail[tail_len - 2] = (uint8_t)(len >> 5);
-	tail[tail_len - 1] = (uint8_t)(len << 3);
-	block(h, tail);
+	for (int i = 0; i < 8; i++)
+		tail[tail_len - 1 - i] = (uint8_t)(bits >> (8 * i));
+	block(s->h, tail);
 	if (tail_len == 128)
-		block(h, tail + 64);
+		block(s->h, tail + 64);
 	static const char digits[] = "0123456789abcdef";
 	for (int i = 0; i < 32; i++) {
-		uint32_t byte = (h[i >> 2] >> (24 - 8 * (i & 3))) & 0xFF;
+		uint32_t byte = (s->h[i >> 2] >> (24 - 8 * (i & 3))) & 0xFF;
 		hex[i * 2] = digits[byte >> 4];
 		hex[i * 2 + 1] = digits[byte & 15];
 	}
 	hex[64] = '\0';
+}
+
+void sha256_hex(const uint8_t *data, uint32_t len, char hex[65]) {
+	Sha256 s;
+	sha256_begin(&s);
+	sha256_add(&s, data, len);
+	sha256_end(&s, hex);
 }

@@ -9,6 +9,7 @@
 
 #include "files.h"
 #include "headbin.h"
+#include "json.h"
 #include "net.h"
 #include "package.h"
 #include "sha256.h"
@@ -43,52 +44,7 @@
 #define VPK_MAX (16 * 1024 * 1024)
 #define FILES_MAX 64
 
-// ---- GitHub's answer: just enough JSON ----
-
-// The first "key" at or after from, and where its value starts. NULL if there is none.
-static const char *json_value(const char *from, const char *key) {
-	char quoted[40];
-	snprintf(quoted, sizeof(quoted), "\"%s\"", key);
-	for (const char *at = strstr(from, quoted); at; at = strstr(at + 1, quoted)) {
-		const char *p = at + strlen(quoted);
-		while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-			p++;
-		if (*p != ':')
-			continue; // the word as a value, not a key
-		p++;
-		while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-			p++;
-		return p;
-	}
-	return NULL;
-}
-
-// The string that "key" has, into out. False if it has none, or it doesn't fit.
-static bool json_string(const char *from, const char *key, char *out, int size) {
-	const char *p = json_value(from, key);
-	if (!p || *p != '"')
-		return false;
-	int n = 0;
-	for (p++; *p && *p != '"'; p++) {
-		if (*p == '\\' && p[1])
-			p++; // \" and \/ and \\ are themselves; nothing else is expected here
-		if (n >= size - 1)
-			return false;
-		out[n++] = *p;
-	}
-	out[n] = '\0';
-	return *p == '"';
-}
-
-static int json_number(const char *from, const char *key) {
-	const char *p = json_value(from, key);
-	if (!p || *p < '0' || *p > '9')
-		return -1;
-	int value = 0;
-	for (; *p >= '0' && *p <= '9' && value < 100000000; p++)
-		value = value * 10 + (*p - '0');
-	return value;
-}
+// ---- GitHub's answer ----
 
 // "1.10" against "1.9": more than 0 if a is the newer. A leading v is ignored.
 static int version_compare(const char *a, const char *b) {

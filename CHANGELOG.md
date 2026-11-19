@@ -6,6 +6,9 @@
 
 - **Engram Installer** (`engram_installer.vpk`): an app that installs, updates and uninstalls Engram for you. Install copies `engram.suprx` to `ur0:tai` and adds Engram's lines under `*main`, `*NPXS10015` and `*NPXS10016` in the `config.txt` taiHEN uses, keeping the old file beside it as `config.txt.engram-installer-old`. It can also add Poppins and Righteous, the two fonts its own text is in, to Engram's fonts folder. **Check for a new version** asks GitHub for the latest release, and when there's a newer one, downloads its installer, checks it against the SHA-256 GitHub lists and has the Vita install it over the one running. That goes through a small updater app (an Engram Updater bubble that the new installer deletes again), as an app can't replace its own files.
 
+- **My other projects**, in the installer: the author's other plugins and apps for the Vita, Tweaks/Plugins and CyberFlow Launcher, each with photos and what it does. **Download** lists a project's releases with their notes and installs the one you choose. CyberFlow goes in through the Vita's own installer, with a switch for its data files (422 MB), which are unpacked to `ux0:data/RetroFlow`. Tweaks/Plugins is copied to `ur0:tai` and put first under `*NPXS10015` in taiHEN's config, keeping the old file. Everything downloaded is checked against the SHA-256 GitHub lists for it. The photos, releases and notes are kept in `ux0:data/engram_installer`, so they show at once the next time, and with no network.
+- The installer's enter and back buttons are the Vita's own: O and X on a Japanese console, X and O elsewhere, or as HENkaku Settings has them.
+
 ### Improved
 
 - **Fonts > Apps sets itself up:** giving an app a font adds Engram's line under that app in taiHEN's `config.txt`, and setting it back to System Font takes it out. Engram keeps a copy from before each change (`config.txt.engram-old`) and the original (`ur0:data/engram/tai_config_original.txt`).

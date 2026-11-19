@@ -23,7 +23,7 @@ static void sys(int op, void *arg) {
 }
 static void out(const char *s) { sys(4, (void *)s); }
 
-static uint8_t heap[12 * 1024 * 1024];
+static uint8_t heap[32 * 1024 * 1024];
 static size_t heap_at;
 void *malloc(size_t n) { n = (n + 15) & ~(size_t)15; if (heap_at + n > sizeof(heap)) return 0; void *p = heap + heap_at; heap_at += n; return p; }
 void free(void *p) { (void)p; }
@@ -246,7 +246,8 @@ void run(void) {
 	}
 	sys(0x18, (void *)0x20026);
 }
-uint8_t stack[512 * 1024];
+// (8-byte aligned, as the ARM calling rules want of a stack: 64-bit values are loaded in pairs)
+uint8_t stack[512 * 1024] __attribute__((aligned(8)));
 __asm__(".text\n.global _start\n_start:\nldr sp, =stack_top\nbl run\nb .\n.ltorg\n.equ stack_top, stack + 524288\n");
 // the compiler's helper for dividing, which this bare test has no library for
 int __aeabi_idiv(int a, int b) { bool neg = (a < 0) != (b < 0); unsigned x = a < 0 ? (unsigned)-a : (unsigned)a, y = b < 0 ? (unsigned)-b : (unsigned)b, q = 0; for (int i = 31; i >= 0; i--) if ((x >> i) >= y) { x -= y << i; q |= 1u << i; } return neg ? -(int)q : (int)q; }
