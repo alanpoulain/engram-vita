@@ -16,6 +16,11 @@
 #define SSL_POOL (1024 * 1024)
 #define HTTP_POOL (1024 * 1024)
 #define TIMEOUT_USEC (20 * 1000 * 1000)
+// github.com answers a release's download link with a redirect whose headers
+// come to about 5.7 KB (its Content-Security-Policy alone is 4.2 KB), past the
+// 5000 bytes the library allows unless told otherwise.
+#define HEADER_MAX (64 * 1024)
+#define HEADER_MAX_SMALLER (16 * 1024)
 
 static bool started;
 static int tpl = -1;
@@ -71,6 +76,8 @@ bool net_start(char *why, int why_size) {
 			return false;
 		}
 		sceHttpSetAutoRedirect(tpl, SCE_HTTP_ENABLE); // a release's file is a redirect away
+		if (sceHttpSetResponseHeaderMaxSize(tpl, HEADER_MAX) < 0)
+			sceHttpSetResponseHeaderMaxSize(tpl, HEADER_MAX_SMALLER);
 		sceHttpSetResolveTimeOut(tpl, TIMEOUT_USEC);
 		sceHttpSetConnectTimeOut(tpl, TIMEOUT_USEC);
 		sceHttpSetSendTimeOut(tpl, TIMEOUT_USEC);
@@ -122,6 +129,8 @@ char *net_get(const char *url, const char *accept, int max, int *len, void (*pro
 			         detail & (SCE_HTTPS_ERROR_SSL_NOT_AFTER_CHECK | SCE_HTTPS_ERROR_SSL_NOT_BEFORE_CHECK)
 			             ? " Is the Vita's date right?"
 			             : "");
+		else if (res == (int)SCE_HTTP_ERROR_TOO_LARGE_RESPONSE_HEADER)
+			snprintf(why, (size_t)why_size, "%s's answer had more headers than this app has room for.", host);
 		else
 			snprintf(why, (size_t)why_size, "Couldn't reach %s (0x%08X).", host, (unsigned)res);
 		goto done;

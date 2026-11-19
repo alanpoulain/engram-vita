@@ -46,7 +46,7 @@
 #include "gfx.h"
 #include "update.h"
 
-#define INSTALLER_VERSION "1.4"
+#define INSTALLER_VERSION "1.5"
 
 #define BUNDLED_PLUGIN "app0:engram.suprx"
 #define PLUGIN_PATH "ur0:tai/engram.suprx"

@@ -13,7 +13,7 @@ include("${VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "Engram Installer")
 set(VITA_TITLEID "ENGR00001")
-set(VITA_VERSION "01.40")
+set(VITA_VERSION "01.50")
 
 # The engram.suprx the VPK carries: Engram's own build, next door.
 set(ENGRAM_SUPRX "${CMAKE_CURRENT_SOURCE_DIR}/../build/engram.suprx" CACHE FILEPATH "engram.suprx to bundle")
