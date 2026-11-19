@@ -8,7 +8,9 @@
 #include <string.h>
 
 #include "files.h"
+#include "headbin.h"
 #include "net.h"
+#include "package.h"
 #include "sha256.h"
 #include "unzip.h"
 
@@ -25,8 +27,18 @@
 #define DOWNLOADS "https://github.com/chazzarchibald-ops/engram-vita/releases/download/"
 #define ASSET "engram_installer.vpk"
 #define TITLE_ID "ENGR00001"
-#define APP_DIR "ux0:app/" TITLE_ID
 #define KEPT_VPK "ux0:data/" ASSET
+// The updater: this program again, installed under another title ID (see "installing it").
+#define HELPER_ID "ENGR00002"
+#define HELPER_MARK "updater.txt"                // in the updater's folder, and not in the installer's
+#define HELPER_SFO "app0:updater/param.sfo"      // the updater's param.sfo, which the VPK carries
+#define OWN_HEAD "app0:sce_sys/package/head.bin" // made by whatever installed this app
+#define WORK_DIR "ux0:data/engram_update"
+#define HELPER_DIR WORK_DIR "/helper" // the updater, laid out to be installed
+#define PKG_DIR WORK_DIR "/pkg"       // the new installer, likewise
+#define JOB_FILE WORK_DIR "/job.txt"  // what the updater is to install
+#define HEAD_FILE WORK_DIR "/head.bin" // the header to install it with
+#define EBOOT_MAX (8 * 1024 * 1024)
 #define ANSWER_MAX (256 * 1024)
 #define VPK_MAX (16 * 1024 * 1024)
 #define FILES_MAX 64
@@ -163,7 +175,17 @@ UpdateFound update_check(const char *have, UpdateInfo *info, UpdateSay say) {
 	return found;
 }
 
-// ---- putting the new files in ----
+// ---- installing it ----
+//
+// An app can't write to its own folder in ux0:app, and the system keeps its
+// own records of an installed app, so the new version has to go in through
+// the system's installer (package.h), and not while this app is running. So,
+// as other self-updating homebrew does:
+//   1. this app downloads and checks the VPK and keeps it in ux0:data;
+//   2. it installs an updater, which is this same program under another title
+//      ID with a file beside it that says so, and opens it;
+//   3. the updater unpacks the VPK, has the system install it over this app,
+//      and opens the result, which deletes the updater.
 
 static UpdateSay progress_say;
 static int progress_shown;
@@ -215,18 +237,111 @@ static void make_folders(const char *path) {
 	}
 }
 
+// The VPK's files, each unpacked whole into files[] (NULL for a folder).
+// False, with nothing left in files[], unless it unpacks whole, every name
+// stays inside the app's folder, and it is this app: an eboot.bin, the
+// plugin, and a param.sfo with this app's title ID.
+static bool vpk_unpack(const uint8_t *vpk, int len, ZipEntry *entries, int *count, uint8_t **files) {
+	char path[200];
+	memset(files, 0, sizeof(files[0]) * FILES_MAX);
+	*count = zip_entries(vpk, (uint32_t)len, entries, FILES_MAX);
+	bool has_eboot = false, has_plugin = false, is_this_app = false, sound = *count > 0 && *count < FILES_MAX;
+	for (int i = 0; sound && i < *count; i++) {
+		if (entries[i].name_len > 0 && entries[i].name[entries[i].name_len - 1] == '/')
+			continue; // a folder
+		sound = path_in(PKG_DIR, &entries[i], path, sizeof(path)) &&
+		        (files[i] = zip_extract(vpk, (uint32_t)len, &entries[i])) != NULL;
+		if (!sound)
+			break;
+		has_eboot |= is_name(&entries[i], "eboot.bin");
+		has_plugin |= is_name(&entries[i], "engram.suprx");
+		if (is_name(&entries[i], "sce_sys/param.sfo"))
+			is_this_app = contains(files[i], entries[i].size, TITLE_ID);
+	}
+	if (sound && has_eboot && has_plugin && is_this_app)
+		return true;
+	for (int i = 0; i < FILES_MAX; i++) {
+		free(files[i]);
+		files[i] = NULL;
+	}
+	return false;
+}
+
+// The value of "key=" in the job file's text, into out. False if it isn't there or doesn't fit.
+static bool job_value(const char *job, const char *key, char *out, int size) {
+	char find[24];
+	snprintf(find, sizeof(find), "%s=", key);
+	const char *at = strstr(job, find);
+	if (!at || (at != job && at[-1] != '\n'))
+		return false;
+	at += strlen(find);
+	int n = 0;
+	while (at[n] && at[n] != '\n' && at[n] != '\r')
+		n++;
+	if (n >= size)
+		return false;
+	memcpy(out, at, (size_t)n);
+	out[n] = '\0';
+	return true;
+}
+
+// Step 2: the updater, laid out in HELPER_DIR and installed.
+static bool updater_install(const char *digest, int size, const char *tag, UpdateSay say) {
+	int head_len = 0, error = 0;
+	uint8_t *head = (uint8_t *)file_read(OWN_HEAD, HEADBIN_MAX, &head_len);
+	char title[10] = "";
+	if (head && headbin_sound(head, (uint32_t)head_len))
+		headbin_title(head, title);
+	if (strcmp(title, TITLE_ID) != 0) {
+		free(head);
+		say(SAY_BAD, false, "This app's package header (%s) isn't one it can install with.", OWN_HEAD);
+		return false;
+	}
+	file_remove_tree(WORK_DIR);
+	make_folders(HELPER_DIR "/sce_sys/package/head.bin");
+	make_folders(HELPER_DIR "/font/x");
+	char job[160];
+	snprintf(job, sizeof(job), "sha256=%s\nsize=%d\ntag=%s\n", digest, size, tag);
+	// for the updater: what it is to install, and the header to install it with
+	bool ok = file_write_checked(JOB_FILE, job, (int)strlen(job)) &&
+	          file_write_checked(HEAD_FILE, (const char *)head, head_len);
+	// the updater itself
+	ok = ok && headbin_retitle(head, (uint32_t)head_len, HELPER_ID) &&
+	     file_write_checked(HELPER_DIR "/sce_sys/package/head.bin", (const char *)head, head_len) &&
+	     file_copy("app0:eboot.bin", HELPER_DIR "/eboot.bin", EBOOT_MAX) &&
+	     file_copy(HELPER_SFO, HELPER_DIR "/sce_sys/param.sfo", 64 * 1024) &&
+	     file_write_checked(HELPER_DIR "/" HELPER_MARK, "1\n", 2);
+	free(head);
+	if (!ok) {
+		say(SAY_BAD, false, "Couldn't set the updater up in " WORK_DIR ".");
+		return false;
+	}
+	// (how it looks, which it can do without)
+	file_copy("app0:sce_sys/icon0.png", HELPER_DIR "/sce_sys/icon0.png", 1024 * 1024);
+	file_copy("app0:font/Poppins-Regular.ttf", HELPER_DIR "/font/Poppins-Regular.ttf", 2 * 1024 * 1024);
+	file_copy("app0:font/Righteous-Regular.ttf", HELPER_DIR "/font/Righteous-Regular.ttf", 2 * 1024 * 1024);
+
+	if (!package_start(&error)) {
+		say(SAY_BAD, false, "Couldn't start the system's installer (0x%08X).", (unsigned)error);
+		return false;
+	}
+	if (package_installed(HELPER_ID))
+		package_remove(HELPER_ID);
+	error = package_install(HELPER_DIR);
+	if (error < 0) {
+		say(SAY_BAD, false, "The system wouldn't install the updater (0x%08X).", (unsigned)error);
+		return false;
+	}
+	return true;
+}
+
 bool update_install(const UpdateInfo *info, UpdateSay say) {
 	static ZipEntry entries[FILES_MAX];
 	uint8_t *files[FILES_MAX];
-	char why[160], path[200], staged[208];
-	bool ok = false, touched = false;
+	char why[160];
+	bool ok = false;
 	int count = 0;
-	memset(files, 0, sizeof(files));
 
-	if (!file_exists(APP_DIR "/eboot.bin")) {
-		say(SAY_BAD, false, "This app isn't in " APP_DIR ", so it can't update itself.");
-		return false;
-	}
 	if (!net_start(why, sizeof(why))) {
 		say(SAY_BAD, false, "%s", why);
 		return false;
@@ -242,7 +357,7 @@ bool update_install(const UpdateInfo *info, UpdateSay say) {
 	}
 	say(SAY_TEXT, true, "Downloaded " ASSET " (%d bytes).", len);
 
-	// 1. it is the file GitHub's release lists
+	// it is the file GitHub's release lists
 	char digest[65];
 	sha256_hex(vpk, (uint32_t)len, digest);
 	if (len != info->size || strcmp(digest, info->digest) != 0) {
@@ -251,72 +366,131 @@ bool update_install(const UpdateInfo *info, UpdateSay say) {
 	}
 	say(SAY_GOOD, false, "Its SHA-256 is the one GitHub lists.");
 
-	// 2. it unpacks whole, and it is this app
-	count = zip_entries(vpk, (uint32_t)len, entries, FILES_MAX);
-	bool has_eboot = false, has_plugin = false, is_this_app = false, sound = count > 0 && count < FILES_MAX;
-	for (int i = 0; sound && i < count; i++) {
-		if (entries[i].name_len > 0 && entries[i].name[entries[i].name_len - 1] == '/')
-			continue; // a folder
-		sound = path_in(APP_DIR, &entries[i], path, sizeof(path)) &&
-		        (files[i] = zip_extract(vpk, (uint32_t)len, &entries[i])) != NULL;
-		if (!sound)
-			break;
-		has_eboot |= is_name(&entries[i], "eboot.bin");
-		has_plugin |= is_name(&entries[i], "engram.suprx");
-		if (is_name(&entries[i], "sce_sys/param.sfo"))
-			is_this_app = contains(files[i], entries[i].size, TITLE_ID);
-	}
-	if (!sound || !has_eboot || !has_plugin || !is_this_app) {
+	// it unpacks whole, and it is this app
+	if (!vpk_unpack(vpk, len, entries, &count, files)) {
 		say(SAY_BAD, false, "The download doesn't unpack as the Engram Installer. Nothing was changed.");
 		goto done;
 	}
-
-	// 3. a copy to install by hand, should the rest go wrong
-	bool kept = file_write_checked(KEPT_VPK, (const char *)vpk, len);
-	if (kept)
-		say(SAY_DIM, false, "Kept the VPK at " KEPT_VPK ".");
-
-	// 4. every new file beside the one it replaces, then the swaps, the app itself last
-	for (int i = 0; i < count; i++) {
-		if (!files[i])
-			continue;
-		path_in(APP_DIR, &entries[i], path, sizeof(path));
-		snprintf(staged, sizeof(staged), "%s.new", path);
-		make_folders(path);
-		if (!file_write_checked(staged, (const char *)files[i], (int)entries[i].size)) {
-			say(SAY_BAD, false, "Couldn't write to " APP_DIR ". Nothing was changed.");
-			for (int j = 0; j <= i; j++)
-				if (files[j] && path_in(APP_DIR, &entries[j], path, sizeof(path))) {
-					snprintf(staged, sizeof(staged), "%s.new", path);
-					sceIoRemove(staged);
-				}
-			if (kept)
-				say(SAY_TEXT, false, "You can install the kept VPK with VitaShell instead.");
-			goto done;
-		}
-	}
-	ok = true;
-	for (int pass = 0; pass < 2; pass++)
-		for (int i = 0; i < count; i++) {
-			if (!files[i] || is_name(&entries[i], "eboot.bin") != (pass == 1))
-				continue;
-			path_in(APP_DIR, &entries[i], path, sizeof(path));
-			snprintf(staged, sizeof(staged), "%s.new", path);
-			touched = true;
-			sceIoRemove(path);
-			if (sceIoRename(staged, path) < 0 &&
-			    !file_write_checked(path, (const char *)files[i], (int)entries[i].size))
-				ok = false;
-			sceIoRemove(staged);
-		}
-	if (ok)
-		say(SAY_GOOD, false, "This installer now has Engram %s. Restart it, then choose Install.", info->tag);
-	else if (touched)
-		say(SAY_BAD, false, "Some of the app's files couldn't be replaced. Install %s with VitaShell.",
-		    kept ? "the kept VPK" : "the new VPK");
-done:
 	for (int i = 0; i < FILES_MAX; i++)
 		free(files[i]);
+
+	// where the updater will find it, and where it stays to install by hand
+	if (!file_write_checked(KEPT_VPK, (const char *)vpk, len)) {
+		say(SAY_BAD, false, "Couldn't keep the VPK at " KEPT_VPK ". Nothing was changed.");
+		goto done;
+	}
+	say(SAY_DIM, false, "Kept the VPK at " KEPT_VPK ".");
+
+	ok = updater_install(digest, len, info->tag, say);
+	if (ok)
+		say(SAY_GOOD, false, "Engram %s is ready to install. The updater does it, and opens the new installer.",
+		    info->tag);
+	else
+		say(SAY_TEXT, false, "Nothing was changed. You can install the kept VPK with VitaShell instead.");
+done:
 	free(vpk);
 	return ok;
+}
+
+void update_open_updater(void) {
+	package_launch(HELPER_ID);
+}
+
+bool update_is_updater(void) {
+	return file_exists("app0:" HELPER_MARK);
+}
+
+// Step 3, in the updater.
+bool update_finish(UpdateSay say) {
+	static ZipEntry entries[FILES_MAX];
+	uint8_t *files[FILES_MAX];
+	char path[200], want[65] = "", size_text[16] = "", tag[24] = "", digest[65];
+	uint8_t *vpk = NULL, *head = NULL;
+	bool ok = false;
+	int count = 0, len = 0, job_len = 0, head_len = 0, error = 0;
+	memset(files, 0, sizeof(files));
+
+	char *job = file_read(JOB_FILE, 1024, &job_len);
+	if (!job || !job_value(job, "sha256", want, sizeof(want)) || !job_value(job, "size", size_text, sizeof(size_text)) ||
+	    !job_value(job, "tag", tag, sizeof(tag))) {
+		free(job);
+		say(SAY_BAD, false, "There is no update waiting in " WORK_DIR ".");
+		return false;
+	}
+	free(job);
+	say(SAY_DIM, false, "Installing Engram %s from " KEPT_VPK "...", tag);
+
+	// the VPK is still the one the installer checked
+	vpk = (uint8_t *)file_read(KEPT_VPK, VPK_MAX, &len);
+	if (vpk)
+		sha256_hex(vpk, (uint32_t)len, digest);
+	if (!vpk || strcmp(digest, want) != 0) {
+		say(SAY_BAD, false, "The VPK at " KEPT_VPK " isn't the one that was downloaded. Nothing was changed.");
+		goto done;
+	}
+	if (!vpk_unpack(vpk, len, entries, &count, files)) {
+		say(SAY_BAD, false, "The VPK doesn't unpack as the Engram Installer. Nothing was changed.");
+		goto done;
+	}
+	head = (uint8_t *)file_read(HEAD_FILE, HEADBIN_MAX, &head_len);
+	char title[10] = "";
+	if (head && headbin_sound(head, (uint32_t)head_len))
+		headbin_title(head, title);
+	if (strcmp(title, TITLE_ID) != 0) {
+		say(SAY_BAD, false, "The package header in " WORK_DIR " isn't the installer's. Nothing was changed.");
+		goto done;
+	}
+
+	// its files as the system's installer wants them
+	file_remove_tree(PKG_DIR);
+	bool written = true;
+	for (int i = 0; written && i < count; i++) {
+		if (!files[i])
+			continue;
+		path_in(PKG_DIR, &entries[i], path, sizeof(path));
+		make_folders(path);
+		written = file_write_checked(path, (const char *)files[i], (int)entries[i].size);
+	}
+	make_folders(PKG_DIR "/sce_sys/package/head.bin");
+	written = written && file_write_checked(PKG_DIR "/sce_sys/package/head.bin", (const char *)head, head_len);
+	if (!written) {
+		file_remove_tree(PKG_DIR);
+		say(SAY_BAD, false, "Couldn't unpack the VPK into " PKG_DIR ". Nothing was changed.");
+		goto done;
+	}
+	say(SAY_TEXT, false, "Unpacked %d files. Installing...", count);
+
+	if (!package_start(&error)) {
+		say(SAY_BAD, false, "Couldn't start the system's installer (0x%08X). Nothing was changed.", (unsigned)error);
+		goto done;
+	}
+	error = package_install(PKG_DIR);
+	if (error < 0) {
+		say(SAY_BAD, false, "The system wouldn't install it (0x%08X).", (unsigned)error);
+		goto done;
+	}
+	ok = true;
+	file_remove_tree(WORK_DIR);
+	say(SAY_GOOD, false, "Engram Installer is updated, with Engram %s. Opening it...", tag);
+done:
+	if (!ok)
+		say(SAY_TEXT, false, "You can install " KEPT_VPK " with VitaShell instead.");
+	for (int i = 0; i < FILES_MAX; i++)
+		free(files[i]);
+	free(head);
+	free(vpk);
+	return ok;
+}
+
+void update_open_installer(void) {
+	package_launch(TITLE_ID);
+}
+
+void update_tidy(void) {
+	if (!file_exists("ux0:app/" HELPER_ID "/eboot.bin"))
+		return;
+	int error = 0;
+	if (package_start(&error))
+		package_remove(HELPER_ID);
+	file_remove_tree(WORK_DIR);
 }

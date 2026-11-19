@@ -1,5 +1,7 @@
-// Runs update.c on the ARM simulator with the network and the file system
-// replaced by stand-ins that print what they are asked to do.
+// Runs update.c on the ARM simulator with the network, the file system and
+// the system's installer replaced by stand-ins that print what they are asked
+// to do. Files written are kept in memory, so the updater's half (update_finish)
+// reads what the installer's half (update_install) left for it.
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <stdarg.h>
@@ -9,6 +11,7 @@
 
 #include "files.h"
 #include "net.h"
+#include "package.h"
 #include "sha256.h"
 #include "update.h"
 #include "cases.h" // made by make_cases.py
@@ -20,7 +23,7 @@ static void sys(int op, void *arg) {
 }
 static void out(const char *s) { sys(4, (void *)s); }
 
-static uint8_t heap[8 * 1024 * 1024];
+static uint8_t heap[12 * 1024 * 1024];
 static size_t heap_at;
 void *malloc(size_t n) { n = (n + 15) & ~(size_t)15; if (heap_at + n > sizeof(heap)) return 0; void *p = heap + heap_at; heap_at += n; return p; }
 void free(void *p) { (void)p; }
@@ -64,7 +67,25 @@ static void outf(const char *fmt, ...) { char line[400]; va_list ap; va_start(ap
 
 // ---- stand-ins ----
 static const Case *now;
-static int fail_write_at, writes;
+static int writes, installs;
+static bool as_updater;
+
+// the files written so far
+#define KEPT 96
+static struct { char path[200]; const char *data; int len; } kept[KEPT];
+static int kept_count;
+
+static int kept_find(const char *path) {
+	for (int i = 0; i < kept_count; i++)
+		if (strcmp(kept[i].path, path) == 0)
+			return i;
+	return -1;
+}
+
+static bool under(const char *path, const char *dir) {
+	size_t n = strlen(dir);
+	return strncmp(path, dir, n) == 0 && (path[n] == '/' || path[n] == '\0');
+}
 
 bool net_start(char *why, int size) { (void)why; (void)size; return true; }
 char *net_get(const char *url, const char *accept, int max, int *len, void (*progress)(int, int), char *why, int size) {
@@ -79,18 +100,110 @@ char *net_get(const char *url, const char *accept, int max, int *len, void (*pro
 	*len = n;
 	return copy;
 }
-bool file_exists(const char *path) { (void)path; return true; }
+
+// What the app's own folder holds: stand-ins for its program and pictures,
+// and the package header this case gives it.
+static const char *own_file(const char *path, int *len) {
+	static const char eboot[] = "the installer's eboot.bin", sfo[] = "the updater's param.sfo ENGR00002",
+	                  other[] = "a picture or a font";
+	if (strcmp(path, "app0:sce_sys/package/head.bin") == 0) {
+		*len = (int)now->head_len;
+		return now->head_len ? (const char *)now->head : 0;
+	}
+	if (strcmp(path, "app0:updater.txt") == 0) { *len = 2; return as_updater ? "1\n" : 0; }
+	if (strcmp(path, "app0:eboot.bin") == 0) { *len = sizeof(eboot) - 1; return eboot; }
+	if (strcmp(path, "app0:updater/param.sfo") == 0) { *len = sizeof(sfo) - 1; return sfo; }
+	if (strncmp(path, "app0:", 5) == 0) { *len = sizeof(other) - 1; return other; }
+	return 0;
+}
+
+bool file_exists(const char *path) {
+	int len;
+	if (strcmp(path, "ux0:app/ENGR00002/eboot.bin") == 0)
+		return false;
+	return own_file(path, &len) || kept_find(path) >= 0;
+}
+
+char *file_read(const char *path, int max, int *len) {
+	int n = 0, at = kept_find(path);
+	const char *from = at >= 0 ? kept[at].data : own_file(path, &n);
+	if (at >= 0)
+		n = kept[at].len;
+	if (!from || n > max)
+		return 0;
+	char *copy = malloc((size_t)n + 1);
+	memcpy(copy, from, (size_t)n);
+	copy[n] = '\0';
+	*len = n;
+	return copy;
+}
+
 bool file_write_checked(const char *path, const char *buf, int len) {
 	char hex[65];
 	sha256_hex((const uint8_t *)buf, (uint32_t)len, hex);
 	writes++;
-	bool ok = writes != fail_write_at;
+	bool ok = writes != now->fail_write_at;
 	outf("    write %s %d %s%s\n", path, len, hex, ok ? "" : " -> FAILS");
-	return ok;
+	if (!ok)
+		return false;
+	int at = kept_find(path);
+	if (at < 0 && kept_count < KEPT)
+		at = kept_count++;
+	if (at < 0)
+		return false;
+	char *copy = malloc((size_t)len + 1);
+	memcpy(copy, buf, (size_t)len);
+	snprintf(kept[at].path, sizeof(kept[at].path), "%s", path);
+	kept[at].data = copy;
+	kept[at].len = len;
+	return true;
 }
-int sceIoMkdir(const char *dir, SceMode mode) { (void)mode; outf("    mkdir %s\n", dir); return 0; }
-int sceIoRemove(const char *path) { outf("    remove %s\n", path); return 0; }
-int sceIoRename(const char *from, const char *to) { outf("    rename %s -> %s\n", from, to); return 0; }
+
+bool file_copy(const char *from, const char *to, int max) {
+	int len = 0;
+	char *buf = file_read(from, max, &len);
+	return buf && file_write_checked(to, buf, len);
+}
+
+void file_remove_tree(const char *path) {
+	int gone = 0;
+	for (int i = 0; i < kept_count;)
+		if (under(kept[i].path, path)) {
+			kept[i] = kept[--kept_count];
+			gone++;
+		} else {
+			i++;
+		}
+	outf("    remove all of %s (%d files)\n", path, gone);
+}
+
+int sceIoMkdir(const char *dir, SceMode mode) { (void)dir; (void)mode; return 0; }
+
+bool package_start(int *error) { (void)error; return true; }
+int package_install(const char *dir) {
+	installs++;
+	bool ok = installs != now->fail_install_at;
+	int files = 0;
+	for (int i = 0; i < kept_count; i++)
+		files += under(kept[i].path, dir);
+	outf("    SYSTEM INSTALL of %s (%d files)%s\n", dir, files, ok ? "" : " -> FAILS");
+	char head[220];
+	snprintf(head, sizeof(head), "%s/sce_sys/package/head.bin", dir);
+	int at = kept_find(head);
+	if (at >= 0)
+		outf("      its header is for %.9s\n", kept[at].data + 0x37);
+	if (!ok)
+		return (int)0x80870004;
+	for (int i = 0; i < kept_count;) // the folder is taken
+		if (under(kept[i].path, dir))
+			kept[i] = kept[--kept_count];
+		else
+			i++;
+	return 0;
+}
+bool package_installed(const char *titleid) { (void)titleid; return false; }
+int package_remove(const char *titleid) { outf("    SYSTEM DELETE of %s\n", titleid); return 0; }
+void package_launch(const char *titleid) { outf("    OPEN %s\n", titleid); }
 
 static void say(SayKind kind, bool again, const char *fmt, ...) {
 	char line[200]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof(line), fmt, ap); va_end(ap);
@@ -102,20 +215,38 @@ void run(void) {
 	for (uint8_t *p = __bss_start__; p < __bss_end__; p++) *p = 0;
 	for (int i = 0; i < CASE_COUNT; i++) {
 		now = &cases[i];
-		heap_at = 0; writes = 0; fail_write_at = now->fail_write_at;
+		heap_at = 0; writes = 0; installs = 0; kept_count = 0; as_updater = false;
 		outf("CASE %s (installer has %s)\n", now->name, now->have);
 		UpdateInfo info;
 		UpdateFound found = update_check(now->have, &info, say);
 		outf("  => %s\n", found == UPDATE_READY ? "READY" : found == UPDATE_NONE ? "NONE" : "FAILED");
-		if (found == UPDATE_READY) {
-			outf("  url %s\n  size %d digest %s\n", info.url, info.size, info.digest);
-			bool ok = update_install(&info, say);
-			outf("  => install %s\n", ok ? "OK" : "REFUSED");
+		if (found != UPDATE_READY)
+			continue;
+		outf("  url %s\n  size %d digest %s\n", info.url, info.size, info.digest);
+		bool ok = update_install(&info, say);
+		outf("  => updater %s\n", ok ? "READY" : "NOT INSTALLED");
+		if (!ok)
+			continue;
+		update_open_updater();
+		// the updater's turn
+		as_updater = true;
+		if (now->tamper) { // the kept VPK is changed behind its back
+			int at = kept_find("ux0:data/engram_installer.vpk");
+			((char *)kept[at].data)[kept[at].len / 2] ^= 0x10;
+			outf("  (the kept VPK is changed)\n");
 		}
+		outf("  as the updater: %s\n", update_is_updater() ? "yes" : "NO");
+		ok = update_finish(say);
+		outf("  => install %s\n", ok ? "OK" : "REFUSED");
+		if (ok)
+			update_open_installer();
+		outf("  files left behind: %d\n", kept_count);
+		for (int k = 0; k < kept_count; k++)
+			outf("    left %s\n", kept[k].path);
 	}
 	sys(0x18, (void *)0x20026);
 }
 uint8_t stack[512 * 1024];
-__asm__(".text\n.global _start\n_start:\nldr sp, =stack_top\nbl run\nb .\n.equ stack_top, stack + 524288\n");
+__asm__(".text\n.global _start\n_start:\nldr sp, =stack_top\nbl run\nb .\n.ltorg\n.equ stack_top, stack + 524288\n");
 // the compiler's helper for dividing, which this bare test has no library for
 int __aeabi_idiv(int a, int b) { bool neg = (a < 0) != (b < 0); unsigned x = a < 0 ? (unsigned)-a : (unsigned)a, y = b < 0 ? (unsigned)-b : (unsigned)b, q = 0; for (int i = 31; i >= 0; i--) if ((x >> i) >= y) { x -= y << i; q |= 1u << i; } return neg ? -(int)q : (int)q; }

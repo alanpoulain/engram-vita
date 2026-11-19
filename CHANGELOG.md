@@ -4,7 +4,7 @@
 
 ### New
 
-- **Engram Installer** (`engram_installer.vpk`): an app that installs, updates and uninstalls Engram for you. Install copies `engram.suprx` to `ur0:tai` and adds Engram's lines under `*main`, `*NPXS10015` and `*NPXS10016` in the `config.txt` taiHEN uses, keeping the old file beside it as `config.txt.engram-installer-old`. It can also add Poppins and Righteous, the two fonts its own text is in, to Engram's fonts folder. **Check for a new version** asks GitHub for the latest release, and when there's a newer one, downloads its installer, checks it against the SHA-256 GitHub lists and puts it in place of the one running.
+- **Engram Installer** (`engram_installer.vpk`): an app that installs, updates and uninstalls Engram for you. Install copies `engram.suprx` to `ur0:tai` and adds Engram's lines under `*main`, `*NPXS10015` and `*NPXS10016` in the `config.txt` taiHEN uses, keeping the old file beside it as `config.txt.engram-installer-old`. It can also add Poppins and Righteous, the two fonts its own text is in, to Engram's fonts folder. **Check for a new version** asks GitHub for the latest release, and when there's a newer one, downloads its installer, checks it against the SHA-256 GitHub lists and has the Vita install it over the one running. That goes through a small updater app (an Engram Updater bubble that the new installer deletes again), as an app can't replace its own files.
 
 ### Improved
 

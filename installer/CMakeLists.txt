@@ -39,7 +39,8 @@ if(UPDATE_TEST_TAG AND UPDATE_TEST_HAVE)
   set(ENGRAM_VERSION "${UPDATE_TEST_HAVE}")
 endif()
 
-add_executable(engram_installer main.c gfx.c liquid.c files.c net.c sha256.c unzip.c update.c)
+add_executable(engram_installer main.c gfx.c liquid.c files.c net.c sha256.c sha1.c headbin.c package.c unzip.c
+               update.c)
 target_compile_definitions(engram_installer PRIVATE ENGRAM_VERSION="${ENGRAM_VERSION}")
 if(UPDATE_TEST_TAG)
   target_compile_definitions(engram_installer PRIVATE UPDATE_TEST_TAG="${UPDATE_TEST_TAG}")
@@ -61,8 +62,20 @@ target_link_libraries(engram_installer
   SceNetCtl_stub
   SceHttp_stub
   SceSsl_stub
+  ScePromoterUtil_stub
   m
 )
+
+# The updater's param.sfo. To update itself the installer installs this same
+# eboot.bin under a second title ID, and that app puts the new version in
+# (update.c). Its package header is made on the console from the installer's own.
+set(UPDATER_SFO "${CMAKE_CURRENT_BINARY_DIR}/updater_param.sfo")
+add_custom_command(OUTPUT "${UPDATER_SFO}"
+  COMMAND ${VITA_MKSFOEX} -s APP_VER=01.00 -s TITLE_ID=ENGR00002 "Engram Updater" "${UPDATER_SFO}"
+  COMMENT "Generating the updater's param.sfo"
+  VERBATIM
+)
+add_custom_target(updater_sfo ALL DEPENDS "${UPDATER_SFO}")
 
 # UNSAFE: the installer writes to ur0:tai and ur0:data.
 vita_create_self(eboot.bin engram_installer UNSAFE)
@@ -70,6 +83,7 @@ vita_create_vpk(engram_installer.vpk ${VITA_TITLEID} eboot.bin
   VERSION ${VITA_VERSION}
   NAME ${VITA_APP_NAME}
   FILE ${ENGRAM_SUPRX} engram.suprx
+  FILE ${UPDATER_SFO} updater/param.sfo
   # the fonts the app's text is in (SIL Open Font License: the licence goes with them)
   FILE font/Poppins-Regular.ttf font/Poppins-Regular.ttf
   FILE font/OFL-Poppins.txt font/OFL-Poppins.txt

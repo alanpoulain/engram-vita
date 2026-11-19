@@ -1,5 +1,6 @@
 #include "files.h"
 
+#include <psp2/io/dirent.h>
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <stdlib.h>
@@ -63,4 +64,38 @@ bool file_write_checked(const char *path, const char *buf, int len) {
 	bool same = back && back_len == len && memcmp(back, buf, len) == 0;
 	free(back);
 	return same;
+}
+
+bool file_copy(const char *from, const char *to, int max) {
+	int len = 0;
+	char *buf = file_read(from, max, &len);
+	bool ok = buf && file_write_checked(to, buf, len);
+	free(buf);
+	return ok;
+}
+
+void file_remove_tree(const char *path) {
+	SceUID dir = sceIoDopen(path);
+	if (dir < 0) {
+		sceIoRemove(path); // a file, or nothing
+		return;
+	}
+	SceIoDirent entry;
+	for (;;) {
+		memset(&entry, 0, sizeof(entry));
+		if (sceIoDread(dir, &entry) <= 0)
+			break;
+		char child[256];
+		if (strlen(path) + 1 + strlen(entry.d_name) >= sizeof(child))
+			continue;
+		strcpy(child, path);
+		strcat(child, "/");
+		strcat(child, entry.d_name);
+		if (SCE_S_ISDIR(entry.d_stat.st_mode))
+			file_remove_tree(child);
+		else
+			sceIoRemove(child);
+	}
+	sceIoDclose(dir);
+	sceIoRmdir(path);
 }

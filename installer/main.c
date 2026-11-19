@@ -503,9 +503,10 @@ typedef enum {
 	RESULT_PLUGIN,       // Engram was installed or removed: START restarts the Vita
 	RESULT_NOTE,         // something to read
 	RESULT_UPDATE_READY, // a newer release: START downloads it
-	RESULT_UPDATED,      // this app's files are the new version's: START restarts the app
+	RESULT_UPDATED,      // the new version is downloaded and the updater installed: START opens it
 } ResultKind;
 static ResultKind result_kind;
+static bool updater; // this program is running as the updater (update.h)
 
 #define PANEL_ALPHA 92
 #define LEFT_X 32
@@ -569,8 +570,14 @@ static void render_ui(int view, int selected, bool installed, bool ok, const cha
 	} else {
 		bool working = view == VIEW_WORKING;
 		bool offer = !working && result_kind == RESULT_UPDATE_READY;
-		gfx_text(RIGHT_X + 24, PANEL_Y + 18, 16.0f, working || offer ? COLOR_ACCENT : ok ? COLOR_GOOD : COLOR_BAD, 255,
-		         working ? "Working..." : offer ? "A new version" : ok ? "Done" : "Something went wrong");
+		bool ready = !working && result_kind == RESULT_UPDATED;
+		const char *heading = working ? "Working..."
+		                      : offer ? "A new version"
+		                      : ready ? "Ready to install"
+		                      : ok    ? "Done"
+		                              : "Something went wrong";
+		gfx_text(RIGHT_X + 24, PANEL_Y + 18, 16.0f,
+		         working || offer || ready ? COLOR_ACCENT : ok ? COLOR_GOOD : COLOR_BAD, 255, heading);
 		int y = PANEL_Y + 52;
 		for (int i = 0; i < log_count && y < PANEL_Y + PANEL_H - 24; i++)
 			y = gfx_text_wrap(RIGHT_X + 24, y, 424, 14.0f, 18, log_color[i], log_text[i]) + 4;
@@ -581,10 +588,10 @@ static void render_ui(int view, int selected, bool installed, bool ok, const cha
 		"START: restart the Vita now        O or X: back to the menu",
 		"O or X: back to the menu",
 		"START: download and install it        O or X: back to the menu",
-		"START: restart the installer        O or X: back to the menu",
+		"START: install it now        O or X: back to the menu",
 	};
 	gfx_text(LEFT_X + 24, 476, 16.0f, COLOR_DIM, 255,
-	         view == VIEW_RESULT    ? RESULT_BUTTONS[result_kind]
+	         view == VIEW_RESULT    ? updater ? "O or X: close" : RESULT_BUTTONS[result_kind]
 	         : view == VIEW_WORKING ? "One moment..."
 	                                : "Up / Down: choose        O or X: select        START: exit");
 	if (perf && perf[0])
@@ -632,6 +639,20 @@ int main(void) {
 	UpdateInfo update;
 	char perf[24] = "";
 	unsigned last = 0;
+	updater = update_is_updater();
+	if (updater) {
+		// Opened by the installer to put its new version in. If that works
+		// the new installer opens; if not, what went wrong stays on screen.
+		busy_selected = selected = MENU_UPDATE;
+		if (update_finish(say)) {
+			sceKernelDelayThread(1500 * 1000);
+			update_open_installer();
+		}
+		view = VIEW_RESULT;
+		result_kind = RESULT_NOTE;
+	} else {
+		update_tidy();
+	}
 	SceUInt64 start = sceKernelGetProcessTimeWide(), spent = 0;
 	for (;;) {
 		unsigned pressed = buttons_pressed(&last);
@@ -697,13 +718,10 @@ int main(void) {
 				working_frames = 0;
 				redraw = true;
 			} else if ((pressed & SCE_CTRL_START) && result_kind == RESULT_UPDATED) {
-				// the new eboot.bin, in this app's place
-				if (sceAppMgrLoadExec("app0:eboot.bin", NULL, NULL) < 0) {
-					log_add(COLOR_TEXT, "Close the installer and open it again to finish.");
-					result_kind = RESULT_NOTE;
-					redraw = true;
-				}
+				update_open_updater(); // which ends this app
 			} else if (pressed & (SCE_CTRL_CROSS | SCE_CTRL_CIRCLE)) {
+				if (updater)
+					break;
 				view = VIEW_MENU;
 				redraw = true;
 			}
