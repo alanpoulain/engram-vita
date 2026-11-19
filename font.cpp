@@ -19,16 +19,14 @@
 // memory and crashed (C2-12828-1) before opening a single font. Nothing in a
 // module apps share is patched now.
 //
-// Paf loads after Engram starts, in SceShell (the home screen, LiveArea,
-// quick menu, lock screen and notifications) and in the Settings app alike,
-// so the constructor's import is hooked once the app's main module has
-// loaded Paf with sceSysmoduleLoadModuleInternalWithArg (the app's own
-// import again).
+// Paf loads after Engram starts, in the Settings app as in the others, so
+// the constructor's import is hooked once the app's main module has loaded
+// Paf with sceSysmoduleLoadModuleInternalWithArg (the app's own import
+// again). In SceShell, the Live Area's font is Paf's base font (font_shell).
 //
-// Each app picks its font as it starts (Font > Apps, or the Home Screen's),
-// so a change reaches an app the next time it opens; SceShell's needs a
-// restart. Engram runs in the other system apps only for this, when it's
-// listed under their *NPXS sections in ur0:tai/config.txt.
+// Each app picks its font as it starts (Font > Apps), so a change reaches an
+// app the next time it opens. Engram runs in the other system apps only for
+// this, when it's listed under their *NPXS sections in ur0:tai/config.txt.
 
 #include <psp2/appmgr.h>
 #include <psp2/io/fcntl.h>
@@ -60,6 +58,12 @@
 #define INIT_FONT_MEMORY 0x24
 #define FONT_SLOTS 4
 #define FONT_FILE_MAX (12 * 1024 * 1024)
+// InitParam's pvf_option (+0x54) and the size of Paf's font heap (+0x58),
+// "ScePafFontRasterizerPvfHeap", which every font Paf opens draws from: 1 MB
+// when it's 0 (ScePaf 0xE03A3714; the constructor copies both at 0xE025D3FE).
+#define INIT_PVF_OPTION 0x54
+#define INIT_PVF_HEAP 0x58
+#define PVF_HEAP_DEFAULT (1024 * 1024)
 
 static char font_path[128];
 static const char *font_host = TAI_MAIN_MODULE; // the module whose imports are hooked
@@ -69,6 +73,8 @@ static tai_hook_ref_t load_ref, ctor_ref;
 static void *font_data;
 static SceSize font_size;
 static int font_tried;
+static bool heap_log; // SceShell: log Paf's font heap and pvf_option
+static bool cjk_share; // SceShell on the system font with place fonts (font_shell)
 
 static bool contains(const char *s, const char *part) {
 	int n = str_len(part);
@@ -143,7 +149,7 @@ static bool load_font(void) {
 static void *framework_patched(void *self, void *param) {
 	uint32_t *slots = (uint32_t *)((char *)param + INIT_FONT_MEMORY);
 	uint32_t saved[FONT_SLOTS * 2];
-	bool swap = param && load_font();
+	bool swap = param && font_path[0] && load_font();
 	if (param)
 		sceClibMemcpy(saved, slots, sizeof(saved));
 	if (swap)
@@ -154,11 +160,22 @@ static void *framework_patched(void *self, void *param) {
 	void *ret = TAI_NEXT(framework_patched, ctor_ref, self, param);
 	if (swap)
 		sceClibMemcpy(slots, saved, sizeof(saved));
+	if (param && heap_log) {
+		uint32_t heap = *(const uint32_t *)((const char *)param + INIT_PVF_HEAP);
+		log_line("font: %s: Paf's font heap %u KB (pvf_option 0x%X)\n", font_who,
+		         (unsigned)((heap ? heap : PVF_HEAP_DEFAULT) / 1024),
+		         (unsigned)*(const uint32_t *)((const char *)param + INIT_PVF_OPTION));
+	}
 	if (param)
 		log_line("font: %s: Paf started with %s (the app's own font memory: %08X %08X %08X %08X)\n", font_who,
 		         swap ? "your font" : "the system font", saved[0], saved[2], saved[4], saved[6]);
-	if (font_host && str_eq(font_host, "SceShell"))
+	if (font_host && str_eq(font_host, "SceShell")) {
+		if (swap)
+			shell_base_font_in(); // Paf then skipped the system's shared fonts: see shell.cpp
+		else if (cjk_share)
+			shell_share_cjk_slots();
 		shell_framework_ready();
+	}
 	return ret;
 }
 
@@ -167,7 +184,8 @@ static void hook_framework(void) {
 		return;
 	ctor_hook = taiHookFunctionImport(&ctor_ref, font_host, LIB_SCEPAFTOPLEVEL, NID_FRAMEWORK_CTOR,
 	                                  (const void *)framework_patched);
-	log_line("font: %s: Paf is loaded, Framework hook 0x%08X, using %s\n", font_who, ctor_hook, font_path);
+	log_line("font: %s: Paf is loaded, Framework hook 0x%08X, using %s\n", font_who, ctor_hook,
+	         font_path[0] ? font_path : "the system font");
 }
 
 static int load_internal_patched(SceSysmoduleInternalModuleId id, SceSize args, void *argp,
@@ -215,6 +233,54 @@ void font_start(const char *file, const char *host) {
 		return;
 	}
 	load_hook = taiHookFunctionImport(&load_ref, host, LIB_SCESYSMODULE, NID_LOAD_INTERNAL_WITH_ARG,
+	                                  (const void *)load_internal_patched);
+	log_line("font: %s: waiting for Paf, hook 0x%08X\n", font_who, load_hook);
+}
+
+// SceShell's Paf: the Live Area's font goes in all four language slots, as in
+// an app, so it's SceShell's base font (and so the boot warning's, the lock
+// screen's and the rest's, unless a place has a font of its own).
+//
+// With the Live Area on the system font and a place font set, Paf's Hangul
+// and Chinese slots share the system's Japanese font (shell.cpp,
+// shell_share_cjk_slots), and the Japanese and Latin slots keep the system's
+// shared fonts as they are. Left empty, Paf fills those two slots with system
+// fonts it opens by number (scePvfFindOptimumFont, ScePaf 0xE03A3DBC;
+// scePvfOpen; font cache kinds 0x10 and 0xC), and opens them again whenever
+// its font cache makes room. Each time, the place font Engram had put in went
+// wrong (2026-11-17 tests: an empty glyph for every letter, the lock screen
+// blank). With a font in every slot, Paf never opens one by number, and no
+// place font went wrong. The first fix gave those two slots the system's
+// small Latin font (ltn0.pvf) in memory, which left Chinese and Korean blank;
+// the Japanese font has the kanji, so most Chinese text shows now, at no cost:
+// it's open already. Hangul still comes out blank: the real Korean font
+// (sa0:data/font/pvf/kr0.pvf, 618 KB) would have to stay open as a file, and
+// SceShell had no room for one more (see shell.cpp, place_open).
+//
+// Paf's font heap is left as SceShell has it (1 MB, pvf_option 0). Making it
+// 1 MB bigger crashed SceShell on all six boots tried (2026-11-17), 150 to
+// 230 frames in: it's a memory block of SceShell's own (ScePaf 0xE02173D0).
+void font_shell(const char *live_area_file, bool places) {
+	heap_log = true;
+	if (live_area_file && live_area_file[0]) {
+		font_start(live_area_file, "SceShell");
+		if (ctor_hook >= 0 || load_hook >= 0)
+			return;
+		font_path[0] = '\0'; // missing or not a font: the system font, as below
+	}
+	if (!places)
+		return;
+	font_host = "SceShell";
+	sceClibStrncpy(font_who, "SceShell", sizeof(font_who) - 1);
+	font_path[0] = '\0'; // no font in InitParam: the slots are set once Paf has made them
+	cjk_share = true;
+	tai_module_info_t info;
+	info.size = sizeof(info);
+	if (taiGetModuleInfo("ScePaf", &info) >= 0) {
+		hook_framework();
+		return;
+	}
+	load_hook = taiHookFunctionImport(&load_ref, font_host, LIB_SCESYSMODULE, NID_LOAD_INTERNAL_WITH_ARG,
 	                                  (const void *)load_internal_patched);
 	log_line("font: %s: waiting for Paf, hook 0x%08X\n", font_who, load_hook);
 }

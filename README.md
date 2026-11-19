@@ -35,6 +35,15 @@ Settings > System > Engram
   Credits
 ```
 
+## What's new in 1.6
+
+- **Engram Installer**, an app that installs, updates and uninstalls Engram, and can update itself from GitHub. See [Install](#install).
+- **Fonts > Apps sets itself up:** giving an app a font adds Engram's line for that app to taiHEN's `config.txt`, and System Font takes it out again.
+- **Photos, Music and Camera start again** with a Live Area font set ([#3](https://github.com/chazzarchibald-ops/engram-vita/issues/3)).
+- The lock screen, status bar, boot warning and quick menu can have fonts of their own with the Live Area on System Font.
+
+The [changelog](CHANGELOG.md) has the rest.
+
 ## What's new in 1.5
 
 1.5 is the second public release, after 1.0. Everything since 1.0:
@@ -197,23 +206,28 @@ Put your fonts in `ur0:data/engram/fonts` (`.ttf`, `.otf` or `.pvf`, up to 40). 
 
 | Setting | Default | What it changes |
 |---|---|---|
-| Live Area | System Font | The whole home screen's font: the Live Area and its app pages, and everything below that's left on Same as Live Area |
-| Lock Screen | Same as Live Area | The lock screen's clock and date |
-| Status Bar & Notifications | Same as Live Area | The status bar at the top of the screen (the clock and the battery) and the notifications |
-| Boot Warning | Same as Live Area | The warning the Vita shows as it starts, before the lock screen. It works with VitaTweaks' CustomWarning text too |
-| Quick Menu | Same as Live Area | The quick menu you open by holding the PS button, its buttons and toggles included (and Quick Menu Plus's Restart and Power Off) |
-| Apps | Same as Live Area | A font for each of 17 system apps: Settings, Music, Videos, Photos, Internet Browser, PlayStation Store, Trophy Collection, Friends, Messages, Party, near, Content Manager, Email, Calendar, PS4 Link, PS3 Remote Play and Parental Controls. Each can be Same as Live Area, System Font, or one of yours |
+| Live Area | System Font | The whole home screen's font: the Live Area and its app pages, its dialogs and keyboard, and every place below that has no font of its own |
+| Lock Screen | System Font | The lock screen's clock and date |
+| Status Bar & Notifications | System Font | The status bar at the top of the screen (the clock and the battery) and the notifications |
+| Boot Warning | System Font | The warning the Vita shows as it starts, before the lock screen. It works with VitaTweaks' CustomWarning text too |
+| Quick Menu | System Font | The quick menu you open by holding the PS button, its buttons and toggles included (and Quick Menu Plus's Restart and Power Off) |
+| Apps | System Font | A font for each of 17 system apps: Settings, Music, Videos, Photos, Internet Browser, PlayStation Store, Trophy Collection, Friends, Messages, Party, near, Content Manager, Email, Calendar, PS4 Link, PS3 Remote Play and Parental Controls. Each can be System Font, Same as Live Area, or one of yours |
 
 - **Restart the Vita** after changing the Live Area font or a place's. An app's font applies the next time the app opens.
-- **Use a font with your language's letters**, or a multi-language one if you use more than one (English and Japanese, say). In a place's font, letters it doesn't have come from the Live Area font. In the Live Area font, they show as blanks or boxes.
+- **A place on System Font or Same as Live Area** has no font of its own: it shows the Live Area font, or the system font while the Live Area is on System Font.
+- **Use a font with your language's letters**, or a multi-language one if you use more than one (English and Japanese, say). In a place's font, letters it doesn't have come from the Live Area font (the system font with the Live Area on System Font). In the Live Area font and an app's, they show as blanks or boxes.
+- **Korean and Chinese on the home screen:** with the Live Area on System Font and a place font set, Chinese text on the home screen is drawn with the Japanese font's kanji, and Korean letters (and the few Chinese characters Japanese doesn't have) show as blanks. Japanese and Latin text isn't affected. It's the cost of keeping the place fonts working there (see How it works).
 - **1 MB limit on the home screen.** The home screen has little memory to spare (a 3.4 MB font crashed it in testing), so the Live Area and place lists mark fonts over 1 MB "(too big)", and Engram leaves them out there. Apps have far more memory and take bigger fonts.
-- **Apps need Engram loaded in them:** add its line under each app's title ID in `config.txt` (see [Install](#install)). Panoramic Camera isn't offered: it wouldn't open with Engram loaded.
+- **Apps need Engram loaded in them:** Engram adds its own line under an app's title IDs in `config.txt` when you give the app a font, and takes it out on System Font (see [Install](#install)). Panoramic Camera isn't offered: it wouldn't open with Engram loaded.
 - **Games aren't touched.** Engram never loads into games, and their text is their own.
 
 How it works:
 
-- **The Live Area and the apps:** Paf, the UI library the home screen and system apps are built on, can open a font from memory for each of its four language slots (Japanese, Latin, Hangul and Chinese), given in `paf::Framework::InitParam`. Engram reads your font into its own memory and puts it in those slots as the app starts Paf, through the app's own import of the Framework constructor, so Paf opens it itself. Nothing shared between apps is patched: in a test build, hooking ScePaf's own imports on the home screen reached every app that uses Paf and crashed Settings.
-- **The places:** Paf draws a character from its text's font family first, when that family has a font and the font has the character, and falls back to the language slots otherwise. Engram moves each place's text (text widgets, and the text objects of buttons and toggles) to a family nothing else uses, and puts the place's font into that family's font object in Paf's font cache, then has the text laid out again. It's all in the home screen's own memory. Paf loads at a different address each boot, so Engram reads the addresses it needs from Paf's own code, after checking that Paf is the 3.65 build it was written for.
+- **The apps:** Paf, the UI library the home screen and system apps are built on, can open a font from memory for each of its four language slots (Japanese, Latin, Hangul and Chinese), given in `paf::Framework::InitParam`. Engram reads your font into its own memory and puts it in those slots as the app starts Paf, through the app's own import of the Framework constructor, so Paf opens it itself, for the whole app. Nothing shared between apps is patched: in a test build, hooking ScePaf's own imports on the home screen reached every app that uses Paf and crashed Settings.
+- **The Live Area:** the home screen's Paf gets the Live Area font in its four language slots, as an app does, so it reaches every part of the home screen.
+- **The places:** Paf draws a character from its text's font family first, when that family has a font and the font has the character, and falls back to the language slots otherwise. Engram moves each place's text (text widgets, and the text objects of buttons and toggles) to a family nothing else uses, and puts the place's font into that family's font object in Paf's font cache, then has the text laid out again, a few texts at a time. Places on the same font share one family and one copy of it. A font up to 128 KB is read into the home screen's memory; a bigger one is opened from its file, which saves memory but holds the file open, and the home screen has little room for either. The font object is kept for the whole boot, so each font goes in once. Paf loads at a different address each boot, so Engram reads the addresses it needs from Paf's own code, after checking that Paf is the 3.65 build it was written for.
+- **The places with the Live Area on System Font:** left alone, Paf fills its Korean and Chinese slots with system fonts it opens by number, and opens them again from time to time. Each time, a place font Engram had just put in stopped drawing. So Engram points those two slots at the system's Japanese font, which Paf has open already, and Paf has nothing to open by number. The real Korean and Chinese fonts would each stay open as a file, and the home screen has no room to spare for that.
+- **Engram only ever opens fonts.** In testing, asking a font for a letter or closing one while Paf was drawing crashed the home screen, so Engram does neither.
 - **The boot warning** is shown before the home screen is fully up, so Engram starts its place font check the moment Paf starts, and the warning comes up in its font from the start.
 
 ## Settings file
@@ -222,8 +236,12 @@ Settings are saved to `ur0:data/engram/config.txt`, and the home screen picks up
 
 ## Install
 
+**With the installer:** install `engram_installer.vpk` with VitaShell, open **Engram Installer**, choose **Install or update Engram**, then restart the Vita. It does steps 1 and 2 below for you and keeps a copy of your `config.txt` from before (`config.txt.engram-installer-old`, beside it). Its **Check for a new version** asks GitHub for the latest release and can download it and update itself; choose Install or update Engram again afterwards. **Uninstall Engram** takes the plugin and its lines out, and leaves your settings and fonts in `ur0:data/engram`.
+
+**By hand:**
+
 1. Copy `engram.suprx` to `ur0:tai/engram.suprx`.
-2. Add it to `ur0:tai/config.txt` in **two** places:
+2. Add it to `ur0:tai/config.txt` in **three** places:
    ```text
    *main
    ur0:tai/engram.suprx
@@ -231,9 +249,17 @@ Settings are saved to `ur0:data/engram/config.txt`, and the home screen picks up
    *NPXS10015
    ur0:tai/henkaku.suprx
    ur0:tai/engram.suprx
+
+   *NPXS10016
+   ur0:tai/henkaku.suprx
+   ur0:tai/engram.suprx
    ```
-   `*main` is the home screen. `*NPXS10015` is the Settings app, and that line adds the settings page. If you have other Settings plugins there, such as Turbo Storage, put Engram's line **straight after `henkaku.suprx`**. Then Engram adds its rows after Turbo Storage's, and both fit. Listed after Turbo Storage, Engram leaves out Fonts > Apps instead, and its page says why.
-3. Optional, for **Fonts > Apps**: add the line under each system app you want a font for. Some apps run under two title IDs, so list both:
+   Your `config.txt` most likely has the `*NPXS10015` and `*NPXS10016` sections already, with `henkaku.suprx` in them. Add Engram's line to them rather than making new ones.
+
+   `*main` is the home screen. `*NPXS10015` is the Settings app, and that line adds the settings page. `*NPXS10016` is the same Settings app when the system or another app opens it for you, so the page is there too; HENkaku and other Settings plugins are listed under both the same way. If you have other Settings plugins, such as Turbo Storage, put Engram's line **straight after `henkaku.suprx`** in both. Then Engram adds its rows after Turbo Storage's, and both fit. Listed after Turbo Storage, Engram leaves out Fonts > Apps instead, and its page says why.
+3. **Fonts > Apps** needs nothing from you here. An app's font only works with Engram loaded into the app, so when you give an app a font in Settings, Engram lists itself under the app's title IDs in the `config.txt` taiHEN uses. When you set the app back to System Font, it takes itself out again, so it isn't loaded into apps it does nothing in. An app set to Same as Live Area follows the Live Area font: Engram lists itself under the app whenever the Live Area has a font.
+
+   Engram only touches its own line under these apps' sections. It never changes `*KERNEL`, `*main`, `*ALL`, Settings' sections or anything else. Before each change it copies the file to `config.txt.engram-old`, and the first time, it keeps the file as it was in `ur0:data/engram/tai_config_original.txt`. It then asks taiHEN to read the file again, so the change applies the next time you open the app, with no reboot. If Engram is already under `*ALL`, it's in every app and nothing is changed. A section Engram adds looks like this:
    ```text
    *NPXS10009
    ur0:tai/engram.suprx
@@ -257,7 +283,7 @@ Settings are saved to `ur0:data/engram/config.txt`, and the home screen picks up
    | PS3 Remote Play | NPXS10012 |
    | Parental Controls | NPXS10094 |
 
-   Settings (NPXS10015) already has the line. Don't add it under Panoramic Camera (NPXS10095): it won't open with Engram loaded.
+   Camera runs as Photos (NPXS10004), so a Photos font loads Engram into Camera too. Settings (NPXS10015 and NPXS10016) has its line from step 2, and Engram leaves it alone. Engram never lists itself under Panoramic Camera (NPXS10095): it won't open with Engram loaded.
 4. For Fonts, put your fonts in `ur0:data/engram/fonts`. Engram makes the folder the first time it runs.
 5. Reboot.
 
@@ -265,13 +291,14 @@ If `shelltheme` is also in `*main`, its page covers the native home screen, so y
 
 ### Troubleshooting
 
-- **No Engram in Settings → System, but the home screen effects work:** the `*NPXS10015` line is missing. Engram only adds its Settings entry when it's loaded into the Settings app itself.
+- **No Engram in Settings → System, but the home screen effects work:** the line under `*NPXS10015` or `*NPXS10016` is missing. Engram only adds its Settings entry when it's loaded into the Settings app itself, and Settings runs under either title ID. Each "in Settings" heading in the log names the one it ran under.
 - **Nothing works at all:** taiHEN reads `ux0:tai/config.txt` instead of `ur0:tai/config.txt` if the ux0 one exists. Add the lines to whichever one your Vita uses.
 - **Engram worked, then stopped after a crash:** the failsafe turned it off. Change the setting you think caused it, turn the **Engram** switch at the top of the page back on, then reboot. Please send the log (see [Safety and diagnostics](#safety-and-diagnostics)).
-- **Another plugin's Settings entry disappeared** (Turbo Storage's, say): put Engram's line straight after `henkaku.suprx` under `*NPXS10015`, as in [Install](#install).
+- **Another plugin's Settings entry disappeared** (Turbo Storage's, say): put Engram's line straight after `henkaku.suprx` under `*NPXS10015` and `*NPXS10016`, as in [Install](#install).
 - **A font shows blanks or boxes:** it doesn't have your language's letters. Use one that does, or a multi-language font.
 - **A font is marked "(too big)":** it's over 1 MB, more than the home screen can take. Use a smaller font for the Live Area and the places. It still works for apps.
-- **An app's font doesn't change:** check that the app's title ID has Engram's line in `config.txt`, then close and reopen the app.
+- **An app's font doesn't change:** close and reopen the app. If it still doesn't, look for `tai config` lines in the log: they say what Engram changed in `config.txt`, or why it couldn't. Lines written by an earlier Engram, or by hand, get tidied up the next time you change a font.
+- **`config.txt` looks wrong after a font change:** the copy from before the change is `config.txt.engram-old` beside it, and the one from before Engram ever changed it is `ur0:data/engram/tai_config_original.txt`. Copy either back over `config.txt` with VitaShell, then reboot.
 - **Anything else:** open an issue with your firmware version, your `config.txt`, and `ur0:data/engram/log.txt` attached.
 
 ## Safety and diagnostics
@@ -281,7 +308,7 @@ If `shelltheme` is also in `*main`, its page covers the native home screen, so y
 - **Turning it back on:** change the setting you think caused the crash, turn the Engram switch on (that deletes `disabled`), then restart. Turning on Scroll Animations, Motion Depth, App Page Animation or an Icon Placement layout also deletes it. You can turn the switch off yourself, too, to stop all of Engram from the next restart.
 - **Please send the log** if the switch turned off by itself after a crash: open an issue at [github.com/chazzarchibald-ops/engram-vita/issues](https://github.com/chazzarchibald-ops/engram-vita/issues) with `ur0:data/engram/log.txt` attached, and `log.old.txt` too if it's there. The log notes each start of Engram in the home screen, Settings and apps, which fonts it loaded and how much memory was free, each place's text it moved to its font, and what it found if anything didn't match. The Engram switch's info text in Settings says the same.
 - **Hold L at boot** to skip Engram for that boot. On Ensō this skips the home screen's other plugins too, shelltheme included.
-- **With an app in front, Engram rests.** SceShell hides the home page then, and Engram stops sampling the motion sensor (if it was the one that started it) and does nothing else until the home page shows again. Engram loads into the home screen, the Settings app, and the system apps you list for Fonts > Apps, never into games.
+- **With an app in front, Engram rests.** SceShell hides the home page then, and Engram stops sampling the motion sensor (if it was the one that started it) and does nothing else until the home page shows again. Engram loads into the home screen, the Settings app, and the system apps that have a font in Fonts > Apps, never into games.
 - With the pages and the Vita both still and Icon Placement off, Engram changes nothing. It only touches bubbles on pages that are mid-scroll, remembers how each one looked first, and puts every one back exactly when its page settles. If SceShell moves a bubble itself mid-scroll (folders, recreated bubbles), Engram takes SceShell's value as the new resting state instead of fighting it.
 - Every Settings hook is an import hook that passes through anything that isn't Engram's. If something doesn't match, the page simply doesn't appear.
 
@@ -306,7 +333,18 @@ cmake --build build
 
 The plugin is `build/engram.suprx`.
 
+The installer is in `installer/`, and bundles the plugin you just built:
+
+```sh
+cmake -S installer -B installer/build -G Ninja
+cmake --build installer/build
+```
+
+That makes `installer/build/engram_installer.vpk`. If the path to `engram.suprx` has a space in it, the VPK isn't packed, so build from a folder without one.
+
 ## Status
+
+**1.6** adds the installer and the changes in the [changelog](CHANGELOG.md).
 
 **1.5** is the second public release. Its test builds were numbered 1.1, so "1.1" further up this README means the work that led to 1.5. Fonts was tested on a retail 3.65 Vita, alongside Turbo Storage, Tweaks, CustomWarning and Quick Menu Plus.
 

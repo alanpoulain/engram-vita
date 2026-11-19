@@ -3,16 +3,18 @@
 // Depth, ShadowBoard-style icons that float in 3D as you tilt the Vita, and Icon
 // Placement, 3D layouts for the icons in place of the Vita's grid.
 //
-// One engram.suprx is listed under two sections of the taiHEN config:
+// One engram.suprx is listed under these sections of the taiHEN config:
 //   *main       SceShell: moves the home screen's bubbles (shell.cpp)
 //   *NPXS10015  the Settings app: adds Settings > System > Engram (settings.cpp)
-// The two processes share nothing but the config file below.
+//   *NPXS10016  the same Settings app, opened by the system or another app
+//               through its settings_dlg: link
+// The processes share nothing but the config file below.
 
 #pragma once
 
 #include <stdint.h>
 
-#define ENGRAM_VERSION "1.5"
+#define ENGRAM_VERSION "1.6"
 
 // Shadows and Wallpaper Parallax are shelved: neither worked on the console
 // (1.2 to 1.6, see README). Their code stays; set this to 0 to bring them back.
@@ -27,6 +29,8 @@
 #define LOG_PATH DATA_DIR "/log.txt"
 #define BOOTING_PATH DATA_DIR "/booting"   // exists from boot until SceShell has run Engram for 30 s
 #define DISABLED_PATH DATA_DIR "/disabled" // keeps the animations off until deleted
+#define NOLOG_PATH DATA_DIR "/nolog"       // Logging is off while it exists
+#define TAI_RELOAD_PATH DATA_DIR "/tai_reload" // Settings changed taiHEN's config: SceShell reloads it
 #define FONT_DIR DATA_DIR "/fonts"         // fonts for Engram's Font category: .ttf, .otf or .pvf
 #define FONT_NAME_MAX 64
 
@@ -132,11 +136,11 @@ struct Config {
 	int app_fade_out;    // enum FadeOut: when the page you swipe away from fades out
 	int app_fade_in;     // enum FadeOut's values: when the page you swipe to fades in
 	int wall_layer;      // enum WallLayer: which widget Wallpaper Parallax moves (for testing)
-	char font_file[FONT_NAME_MAX]; // Font > Home Screen: a file in FONT_DIR, or empty for the system font
-	// Font > Apps, one per FONT_APPS entry: FONT_APP_SAME, FONT_APP_SYSTEM or a file in FONT_DIR.
+	char font_file[FONT_NAME_MAX]; // Font > Live Area: a file in FONT_DIR, or empty for the system font
+	// Font > Apps, one per FONT_APPS entry, and Font > Lock Screen, Status
+	// Bar..., one per PLACE_KEYS entry: empty (or FONT_SYSTEM) for the system
+	// font, FONT_SAME to follow the Live Area's, or a file in FONT_DIR.
 	char app_font[17][FONT_NAME_MAX];
-	// Font > Lock Screen, Status Bar...: one per PLACE_KEYS entry, a file in
-	// FONT_DIR or empty for Same as Home Screen.
 	char place_font[4][FONT_NAME_MAX];
 };
 
@@ -167,6 +171,7 @@ struct Config {
 #define KEY_FONT_FILE "font_file" // a string, not an int: the font's file name
 #define KEY_FONT "font"           // Settings' Home Screen font list: its index into the fonts found
 #define KEY_ENGRAM_ON "engram_on" // Settings' top switch: on while DISABLED_PATH doesn't exist (not in the config)
+#define KEY_LOGGING "logging"     // Settings' Logging switch: on while NOLOG_PATH doesn't exist (not in the config)
 #define KEY_APP_FONT "font_"      // + an app's first title id: its font, a string in the config file
 #define SHADOW_DEPTH_DEFAULT 16
 #define SHADOW_DEPTH_MAX 400
@@ -213,15 +218,22 @@ enum PlaceId { PLACE_LOCK, PLACE_STATUS, PLACE_WARNING, PLACE_QUICK };
 extern const char *const PLACE_KEYS[PLACE_COUNT];  // "font_lock"...: config keys, file names
 extern const char *const PLACE_NAMES[PLACE_COUNT]; // "Lock Screen"...
 int place_key(const char *key);                    // the place a key is for, or -1
-#define FONT_APP_SAME ""         // follow the Home Screen font
-#define FONT_APP_SYSTEM "system" // the system's own font
+// Until 2026-11-16 an empty choice meant Same as Live Area, and the Live
+// Area's font was SceShell's base font: it reached the boot warning, lock
+// screen, status bar, quick menu, dialogs and keyboard, and every app left on
+// Same (user report). Now nothing follows the Live Area unless it's set to.
+#define FONT_SAME "same"     // follow the Live Area's font
+#define FONT_SYSTEM "system" // the system's own font, as an empty choice is
 static_assert(sizeof(((Config *)0)->app_font) / FONT_NAME_MAX == FONT_APP_COUNT, "Config::app_font is one per app");
 static_assert(sizeof(((Config *)0)->place_font) / FONT_NAME_MAX == PLACE_COUNT, "Config::place_font is one per place");
 int font_app_index(const char *title_id); // -1 if it isn't one of FONT_APPS
 int font_app_key(const char *key);         // the app a KEY_APP_FONT key is for, or -1
 // The font file app (an index into FONT_APPS, or -1) uses: its own choice,
-// else the Home Screen's. "" means the system font.
+// the Live Area's on Same as Live Area, or "" for the system font. An app
+// that isn't one of FONT_APPS gets the system font.
 const char *font_for_app(const Config *cfg, int app);
+// The same for a place (enum PlaceId).
+const char *font_for_place(const Config *cfg, int place);
 
 void config_defaults(Config *cfg);
 // Reads CONFIG_PATH over the defaults. Returns 0 if the file was read.
@@ -235,7 +247,9 @@ int str_len(const char *s);
 bool str_eq(const char *a, const char *b);
 bool str_starts(const char *s, const char *prefix);
 
+// Appends to LOG_PATH, unless Logging is off (NOLOG_PATH exists).
 void log_line(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void log_recheck(void); // look at Logging's switch again on the next line, not up to a second later
 bool file_exists(const char *path);
 void write_marker(const char *path);
 
@@ -244,6 +258,8 @@ int shell_start(void);
 void shell_stop(void);
 void shell_paf_loaded(void);      // font.cpp tells SceShell's half when Paf has loaded,
 void shell_framework_ready(void); // and when its Framework is made
+void shell_base_font_in(void);    // and that Paf got the Live Area's font in all four slots,
+void shell_share_cjk_slots(void); // or the system font, with place fonts set
 
 // settings.cpp
 void settings_start(void);
@@ -253,7 +269,19 @@ void settings_stop(void);
 // file (in FONT_DIR; "" keeps the system font); host is the process's main
 // module, which loads Paf after Engram starts, or NULL for the main module.
 void font_start(const char *file, const char *host);
+// SceShell: the Live Area's font as Paf's base font (live_area_file), or with
+// the system font and place fonts set (places), the shared Japanese font in the
+// Hangul and Chinese slots. Either way shell_paf_loaded() and
+// shell_framework_ready() get called.
+void font_shell(const char *live_area_file, bool places);
 void font_stop(void);
 // Engram in one of FONT_APPS' apps: only the font.
 void app_font_start(void);
 bool font_name_ok(const char *name); // a plain file name ending .ttf, .otf or .pvf
+
+// tai.cpp: Engram's lines under the Fonts > Apps apps in taiHEN's config.
+// Settings: lists Engram under each app with a font, and takes it out from
+// under the rest. Returns the lines changed, 0 if none, < 0 if it couldn't.
+int tai_sync(const Config *cfg);
+// SceShell's poll thread: reloads taiHEN's config after Settings changed it.
+void tai_reload_check(void);

@@ -1,0 +1,481 @@
+<title>Engram Installer Preview</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins&family=Righteous&display=swap">
+<style>
+/* Layout: one Vita-sized screen, centred, with its buttons underneath. A single dark look, like the console. */
+:root {
+	color-scheme: dark;
+	--bg: #0b0d13;
+	--surface: #151925;
+	--edge: #2a3146;
+	--fg: #e9eaf0;
+	--muted: #9aa1b4;
+	--accent: #7cc0ff;
+	--font: "Segoe UI", "Helvetica Neue", system-ui, -apple-system, Roboto, Arial, sans-serif;
+	--mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+}
+html, body { height: 100%; }
+body {
+	background: var(--bg);
+	color: var(--fg);
+	font-family: var(--font);
+	font-size: 15px;
+	line-height: 1.5;
+	padding-block: 24px;
+	padding-left: max(16px, env(safe-area-inset-left, 0px));
+	padding-right: max(16px, env(safe-area-inset-right, 0px));
+	box-sizing: border-box;
+}
+.wrap {
+	max-width: 992px;
+	margin: 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
+header p { margin: 0; color: var(--muted); }
+.bezel {
+	background: #05060a;
+	border: 1px solid var(--edge);
+	border-radius: 22px;
+	padding: clamp(8px, 2vw, 16px);
+}
+canvas {
+	display: block;
+	width: 100%;
+	max-width: 100%;
+	height: auto;
+	aspect-ratio: 960 / 544;
+	border-radius: 8px;
+	background: #0e1018;
+	cursor: pointer;
+}
+canvas:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pad { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button {
+	font: inherit;
+	color: var(--fg);
+	background: var(--surface);
+	border: 1px solid var(--edge);
+	border-radius: 10px;
+	padding: 8px 14px;
+	cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-left: 6px; }
+.spacer { flex: 1 1 auto; }
+#rate { color: var(--muted); font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.notes { color: var(--muted); max-width: 70ch; margin: 0; }
+.notes strong { color: var(--fg); font-weight: 600; }
+</style>
+
+<div class="wrap">
+	<header>
+		<h1>Engram Installer</h1>
+		<p>A preview of the Vita app's screen, 960 x 544</p>
+	</header>
+
+	<div class="bezel">
+		<canvas id="screen" width="960" height="544" tabindex="0" aria-label="The installer's screen: a menu on the left, what Engram does on the right, and a ball of liquid moving behind them"></canvas>
+	</div>
+
+	<div class="pad">
+		<button id="btn-up" type="button">Up <kbd>&uarr;</kbd></button>
+		<button id="btn-down" type="button">Down <kbd>&darr;</kbd></button>
+		<button id="btn-select" type="button">Select <kbd>Enter</kbd></button>
+		<button id="btn-start" type="button">START <kbd>Esc</kbd></button>
+		<span class="spacer"></span>
+		<span id="rate"></span>
+		<button id="btn-pause" type="button">Pause</button>
+	</div>
+
+	<p class="notes">The liquid is drawn by the same code as on the Vita, carried over line for line, so the motion, colours and shading are what the console shows. <strong>The text is in the app's own two fonts,</strong> Poppins and Righteous for the name, though the Vita draws the letters with its own font library, so their spacing can differ a little. Nothing is installed from this page, and it doesn't go online: choosing Install, Uninstall or Check for a new version only shows what the app would report.</p>
+</div>
+
+<script>
+/*LIQUID_JS*/
+</script>
+<script>
+'use strict';
+(function () {
+	const N = SCREEN_W * SCREEN_H;
+	const RGB = (r, g, b) => ((b << 16) | (g << 8) | r) >>> 0;
+	const COLOR_TEXT = [0xEC, 0xEC, 0xF0], COLOR_DIM = [0xA8, 0xAE, 0xBE], COLOR_ACCENT = [0x7C, 0xC0, 0xFF];
+	const COLOR_GOOD = [0x76, 0xE0, 0x96], COLOR_BAD = [0xFF, 0x84, 0x84];
+	const PANEL = RGB(10, 12, 20), ACCENT = RGB(0x7C, 0xC0, 0xFF), PANEL_ALPHA = 92;
+	const LEFT_X = 32, RIGHT_X = 456, PANEL_Y = 132, PANEL_H = 316;
+	// The app's two fonts, which its VPK carries: Poppins, and Righteous for the name.
+	const FONT = 'Poppins, "Segoe UI", "Helvetica Neue", system-ui, -apple-system, Roboto, Arial, sans-serif';
+	const TITLE_FONT = 'Righteous, ' + FONT;
+	let font = FONT;
+	const MENU_INSTALL = 0, MENU_FONTS = 1, MENU_UPDATE = 2, MENU_UNINSTALL = 3;
+	const MENU = ['Install or update Engram', 'Add the fonts', 'Check for a new version', 'Uninstall Engram', 'Exit'];
+	let addFonts = true;
+	const MENU_HELP = [
+		"Copies Engram to ur0:tai and adds it to taiHEN's config.txt. A copy of the config is kept first.",
+		"On: installing also puts Poppins and Righteous, this app's fonts, in Engram's fonts folder, to choose in its Font settings.",
+		'Asks GitHub whether a newer Engram is out. If it is, this installer can download it and update itself.',
+		'Takes Engram out of config.txt and deletes the plugin. Your settings and fonts stay.',
+		'Leaves without changing anything.',
+	];
+	const FEATURES = [
+		['Scroll Animations', '15 effects for the icons as you scroll between pages'],
+		['Motion Depth', 'Tilt the Vita and the icons float above the wallpaper'],
+		['Icon Placement', 'Open book, sphere and inside-a-sphere layouts'],
+		['App Page Animation', 'Effects as you swipe between your open apps'],
+		['Fonts', 'Your own fonts for the home screen, lock screen and apps'],
+	];
+	const LOGS = [
+		[
+			[COLOR_GOOD, 'Copied engram.suprx (60967 bytes) to ur0:tai/engram.suprx.'],
+			[COLOR_DIM, "taiHEN's config: ur0:tai/config.txt"],
+			[COLOR_GOOD, 'Config updated. The old one is ur0:tai/config.txt.engram-installer-old'],
+			[COLOR_TEXT, 'Engram is under *main, *NPXS10015 and *NPXS10016.'],
+			[COLOR_TEXT, 'Fonts go in ur0:data/engram/fonts.'],
+			[COLOR_GOOD, 'Done. Restart the Vita to start Engram.'],
+		],
+		[
+			[COLOR_DIM, "taiHEN's config: ur0:tai/config.txt"],
+			[COLOR_GOOD, 'Config updated. The old one is ur0:tai/config.txt.engram-installer-old'],
+			[COLOR_GOOD, 'Deleted ur0:tai/engram.suprx.'],
+			[COLOR_TEXT, 'Your settings, fonts and logs stay in ur0:data/engram.'],
+			[COLOR_GOOD, 'Done. Restart the Vita to finish.'],
+		],
+	];
+
+	// What the app would report: with the fonts added, the line about them says so.
+	function logLines() {
+		if (selected === MENU_UPDATE)
+			return [
+				[COLOR_DIM, 'Asking GitHub for the latest release...'],
+				[COLOR_GOOD, 'This installer has the latest Engram (1.5).'],
+			];
+		if (selected !== MENU_INSTALL)
+			return LOGS[1];
+		return LOGS[0].map((entry) => addFonts && entry[1].startsWith('Fonts go in')
+			? [COLOR_GOOD, 'Added Poppins and Righteous to ur0:data/engram/fonts.'] : entry);
+	}
+
+	const canvas = document.getElementById('screen');
+	const ctx = canvas.getContext('2d');
+	const images = [ctx.createImageData(SCREEN_W, SCREEN_H), ctx.createImageData(SCREEN_W, SCREEN_H)];
+	const fbs = images.map((im) => new Uint32Array(im.data.buffer));
+	const base = new Uint32Array(N), overlay = new Uint32Array(N), scene = new Uint32Array(N);
+	let chrome = null;
+	const layers = { base, overlay, scene };
+	const textCanvas = document.createElement('canvas');
+	textCanvas.width = SCREEN_W;
+	textCanvas.height = SCREEN_H;
+	const tc = textCanvas.getContext('2d', { willReadFrequently: true });
+	const liquid = createLiquid(false);
+
+	// ---- gfx.c, carried over ----
+
+	function drawBase() {
+		const bayer = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+		const top = [14, 16, 24], bottom = [28, 34, 62];
+		for (let y = 0; y < SCREEN_H; y++) {
+			const v = [0, 1, 2].map((ch) => top[ch] * 256 + (((bottom[ch] - top[ch]) * 256 * y) / (SCREEN_H - 1) | 0));
+			for (let x = 0; x < SCREEN_W; x++) {
+				const d = bayer[y & 3][x & 3] * 16;
+				base[y * SCREEN_W + x] = (0xFF000000 | RGB((v[0] + d) >> 8, (v[1] + d) >> 8, (v[2] + d) >> 8)) >>> 0;
+			}
+		}
+	}
+
+	function overPx(p, rgb, a) {
+		if (a <= 0)
+			return;
+		if (a > 255)
+			a = 255;
+		const d = overlay[p];
+		const sa = a + (a >> 7), keep = 256 - sa;
+		const r = (((rgb & 0xFF) * sa) >> 8) + (((d & 0xFF) * keep) >> 8);
+		const g = ((((rgb >> 8) & 0xFF) * sa) >> 8) + ((((d >> 8) & 0xFF) * keep) >> 8);
+		const b = ((((rgb >> 16) & 0xFF) * sa) >> 8) + ((((d >> 16) & 0xFF) * keep) >> 8);
+		const da = a + (((d >>> 24) * keep) >> 8);
+		overlay[p] = (((da > 255 ? 255 : da) << 24) | RGB(Math.min(r, 255), Math.min(g, 255), Math.min(b, 255))) >>> 0;
+	}
+
+	function insideRounded(px, py, cx, cy, hw, hh, radius) {
+		const qx = Math.abs(px - cx) - (hw - radius), qy = Math.abs(py - cy) - (hh - radius);
+		const ox = qx > 0 ? qx : 0, oy = qy > 0 ? qy : 0;
+		const outside = ox > 0 && oy > 0 ? Math.sqrt(ox * ox + oy * oy) : ox + oy;
+		const inner = qx > qy ? qx : qy;
+		return radius - outside - (inner < 0 ? inner : 0);
+	}
+
+	function panel(x, y, w, h, radius, rgb, alpha) {
+		const cx = x + w * 0.5, cy = y + h * 0.5;
+		for (let j = Math.max(0, y); j < y + h && j < SCREEN_H; j++)
+			for (let i = Math.max(0, x); i < x + w && i < SCREEN_W; i++) {
+				const d = insideRounded(i + 0.5, j + 0.5, cx, cy, w * 0.5, h * 0.5, radius);
+				if (d <= -0.5)
+					continue;
+				const cover = d >= 0.5 ? 1.0 : d + 0.5;
+				const p = j * SCREEN_W + i;
+				overPx(p, rgb, (alpha * cover) | 0);
+				const edge = 1.0 - Math.abs(d - 1.0);
+				if (edge > 0) {
+					const strength = 26 + ((22 * (y + h - j)) / h | 0);
+					overPx(p, RGB(255, 255, 255), (strength * edge) | 0);
+				}
+			}
+	}
+
+	function compose() {
+		for (let p = 0; p < N; p++) {
+			const o = overlay[p], b = base[p];
+			const oa = o >>> 24;
+			if (!oa) {
+				scene[p] = b;
+				continue;
+			}
+			const keep = 256 - oa - (oa >> 7);
+			const r = (o & 0xFF) + (((b & 0xFF) * keep) >> 8);
+			const g = ((o >> 8) & 0xFF) + ((((b >> 8) & 0xFF) * keep) >> 8);
+			const bl = ((o >> 16) & 0xFF) + ((((b >> 16) & 0xFF) * keep) >> 8);
+			scene[p] = (0xFF000000 | RGB(Math.min(r, 255), Math.min(g, 255), Math.min(bl, 255))) >>> 0;
+		}
+	}
+
+	// ---- text: the browser draws the letters, where the Vita uses its own font library ----
+
+	const css = (c, a) => 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (a === undefined ? 1 : a) + ')';
+
+	function text(x, y, size, color, s, alpha) {
+		tc.font = size + 'px ' + font;
+		tc.textBaseline = 'alphabetic';
+		tc.fillStyle = css(color, alpha);
+		tc.fillText(s, x, y + Math.floor(size * 1.12));
+		return tc.measureText(s).width;
+	}
+
+	function textWidth(size, s) {
+		tc.font = size + 'px ' + font;
+		return tc.measureText(s).width;
+	}
+
+	function textShadow(x, y, size, color, s) {
+		text(x + 1, y + 2, size, [0, 0, 0], s, 0.59);
+		text(x - 1, y + 1, size, [0, 0, 0], s, 0.35);
+		return text(x, y, size, color, s);
+	}
+
+	function textWrap(x, y, width, size, lineH, color, s) {
+		let line = '';
+		for (const word of s.split(' ')) {
+			const tryLine = line ? line + ' ' + word : word;
+			if (line && textWidth(size, tryLine) > width) {
+				text(x, y, size, color, line);
+				y += lineH;
+				line = word;
+			} else {
+				line = tryLine;
+			}
+		}
+		if (line) {
+			text(x, y, size, color, line);
+			y += lineH;
+		}
+		return y;
+	}
+
+	// The text drawn so far goes over the overlay.
+	function mergeText() {
+		const data = tc.getImageData(0, 0, SCREEN_W, SCREEN_H).data;
+		for (let p = 0, i = 0; p < N; p++, i += 4)
+			if (data[i + 3])
+				overPx(p, RGB(data[i], data[i + 1], data[i + 2]), data[i + 3]);
+		tc.clearRect(0, 0, SCREEN_W, SCREEN_H);
+	}
+
+	// ---- main.c's render_ui ----
+
+	const VIEW_MENU = 0, VIEW_WORKING = 1, VIEW_RESULT = 2;
+	let view = VIEW_MENU, selected = 0, installed = false, workingFrames = 0;
+	const full = [true, true];
+
+	function renderUi() {
+		if (chrome) {
+			overlay.set(chrome);
+		} else {
+			overlay.fill(0);
+			panel(LEFT_X, PANEL_Y, 404, PANEL_H, 20, PANEL, PANEL_ALPHA);
+			panel(RIGHT_X, PANEL_Y, 472, PANEL_H, 20, PANEL, PANEL_ALPHA);
+			panel(LEFT_X, 464, 896, 46, 14, PANEL, PANEL_ALPHA);
+			font = TITLE_FONT;
+			textShadow(40, 20, 54, COLOR_TEXT, 'Engram');
+			font = FONT;
+			textShadow(44, 90, 19, COLOR_DIM, 'Home screen tweaks for the PS Vita');
+			const version = 'Installer 1.4  -  Engram 1.5';
+			textShadow(SCREEN_W - 40 - textWidth(16, version), 42, 16, COLOR_DIM, version);
+			mergeText();
+			chrome = overlay.slice();
+		}
+
+		for (let i = 0; i < MENU.length; i++)
+			if (i === selected && view === VIEW_MENU)
+				panel(LEFT_X + 14, PANEL_Y + 54 + i * 37 - 4, 376, 34, 11, ACCENT, 64);
+
+		tc.fillStyle = css(installed ? COLOR_GOOD : COLOR_DIM);
+		tc.beginPath();
+		tc.arc(LEFT_X + 30, PANEL_Y + 31, 5.5, 0, Math.PI * 2);
+		tc.fill();
+		text(LEFT_X + 46, PANEL_Y + 19, 16, COLOR_DIM, installed ? 'Engram is installed' : "Engram isn't installed yet");
+		for (let i = 0; i < MENU.length; i++) {
+			const on = i === selected && view === VIEW_MENU;
+			text(LEFT_X + 32, PANEL_Y + 54 + i * 37, 20, on ? COLOR_TEXT : COLOR_DIM, MENU[i]);
+			if (i === MENU_FONTS) {
+				const state = addFonts ? 'On' : 'Off';
+				text(LEFT_X + 372 - textWidth(20, state), PANEL_Y + 54 + i * 37, 20, addFonts ? COLOR_ACCENT : COLOR_DIM, state);
+			}
+		}
+		textWrap(LEFT_X + 32, PANEL_Y + 246, 344, 15, 20, COLOR_DIM, MENU_HELP[selected]);
+
+		if (view === VIEW_MENU) {
+			text(RIGHT_X + 24, PANEL_Y + 18, 16, COLOR_ACCENT, 'What Engram does');
+			for (let i = 0; i < FEATURES.length; i++) {
+				const y = PANEL_Y + 50 + i * 46;
+				text(RIGHT_X + 24, y, 19, COLOR_TEXT, FEATURES[i][0]);
+				text(RIGHT_X + 24, y + 24, 13.5, COLOR_DIM, FEATURES[i][1]);
+			}
+			text(RIGHT_X + 24, PANEL_Y + 284, 14, COLOR_ACCENT, 'All set in Settings > System > Engram.');
+		} else {
+			const working = view === VIEW_WORKING;
+			text(RIGHT_X + 24, PANEL_Y + 18, 16, working ? COLOR_ACCENT : COLOR_GOOD, working ? 'Working...' : 'Done');
+			let y = PANEL_Y + 52;
+			if (!working)
+				for (const [color, line] of logLines())
+					y = textWrap(RIGHT_X + 24, y, 424, 14, 18, color, line) + 4;
+		}
+
+		text(LEFT_X + 24, 476, 16, COLOR_DIM,
+			view === VIEW_RESULT ? (selected === MENU_UPDATE ? 'O or X: back to the menu' : 'START: restart the Vita now        O or X: back to the menu')
+			: view === VIEW_WORKING ? 'One moment...'
+				: 'Up / Down: choose        O or X: select        START: exit');
+		mergeText();
+		compose();
+		full[0] = full[1] = true;
+	}
+
+	// ---- main.c's loop ----
+
+	let buf = 0, clock = 0, last = 0, running = true, frames = 0, spent = 0;
+	const rate = document.getElementById('rate');
+
+	function press(button) {
+		if (view === VIEW_MENU) {
+			if (button === 'up')
+				selected = (selected + MENU.length - 1) % MENU.length;
+			else if (button === 'down')
+				selected = (selected + 1) % MENU.length;
+			else if (button === 'select' && selected === MENU_FONTS)
+				addFonts = !addFonts;
+			else if (button === 'select' && selected !== MENU.length - 1) {
+				view = VIEW_WORKING;
+				workingFrames = 0;
+			} else if (button !== 'select')
+				return;
+		} else if (view === VIEW_RESULT) {
+			view = VIEW_MENU;
+		} else {
+			return;
+		}
+		renderUi();
+		if (!running)
+			draw(0);
+	}
+
+	function draw(dt) {
+		if (view === VIEW_WORKING && ++workingFrames > 24) {
+			if (selected !== MENU_UPDATE)
+				installed = selected === MENU_INSTALL;
+			view = VIEW_RESULT;
+			renderUi();
+		}
+		clock += dt;
+		const before = performance.now();
+		liquid.frame(fbs[buf], buf, clock, full[buf], layers);
+		full[buf] = false;
+		spent += performance.now() - before;
+		ctx.putImageData(images[buf], 0, 0);
+		buf ^= 1;
+		if (++frames >= 30) {
+			rate.textContent = (spent / frames).toFixed(1) + ' ms a frame here';
+			frames = 0;
+			spent = 0;
+		}
+	}
+
+	function tick(now) {
+		if (!running)
+			return;
+		const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
+		last = now;
+		draw(dt);
+		requestAnimationFrame(tick);
+	}
+
+	function setRunning(on) {
+		running = on;
+		document.getElementById('btn-pause').textContent = on ? 'Pause' : 'Play';
+		if (on) {
+			last = 0;
+			requestAnimationFrame(tick);
+		}
+	}
+
+	// The text is drawn once and kept, so it is drawn again when the fonts arrive.
+	if (document.fonts && document.fonts.load)
+		Promise.all([document.fonts.load('16px Poppins'), document.fonts.load('54px Righteous')]).then(() => {
+			chrome = null;
+			renderUi();
+		}).catch(() => {});
+
+	document.getElementById('btn-up').addEventListener('click', () => press('up'));
+	document.getElementById('btn-down').addEventListener('click', () => press('down'));
+	document.getElementById('btn-select').addEventListener('click', () => press('select'));
+	document.getElementById('btn-start').addEventListener('click', () => press('start'));
+	document.getElementById('btn-pause').addEventListener('click', () => setRunning(!running));
+	document.addEventListener('keydown', (e) => {
+		const map = { ArrowUp: 'up', ArrowDown: 'down', Enter: 'select', x: 'select', o: 'select', Escape: 'start' };
+		const button = map[e.key];
+		if (!button || e.target.tagName === 'BUTTON' && e.key === 'Enter')
+			return;
+		e.preventDefault();
+		press(button);
+	});
+	canvas.addEventListener('click', (e) => {
+		const box = canvas.getBoundingClientRect();
+		const x = (e.clientX - box.left) * SCREEN_W / box.width, y = (e.clientY - box.top) * SCREEN_H / box.height;
+		if (view !== VIEW_MENU) {
+			press('select');
+			return;
+		}
+		for (let i = 0; i < MENU.length; i++) {
+			const top = PANEL_Y + 54 + i * 37 - 4;
+			if (x >= LEFT_X + 14 && x < LEFT_X + 390 && y >= top && y < top + 34) {
+				if (selected === i) {
+					press('select');
+				} else {
+					selected = i;
+					renderUi();
+					if (!running)
+						draw(0);
+				}
+			}
+		}
+	});
+
+	drawBase();
+	clock = 1.2;
+	renderUi();
+	draw(0);
+	draw(0);
+	const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	setRunning(!calm);
+})();
+</script>

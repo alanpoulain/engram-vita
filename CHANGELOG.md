@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.6
+
+### New
+
+- **Engram Installer** (`engram_installer.vpk`): an app that installs, updates and uninstalls Engram for you. Install copies `engram.suprx` to `ur0:tai` and adds Engram's lines under `*main`, `*NPXS10015` and `*NPXS10016` in the `config.txt` taiHEN uses, keeping the old file beside it as `config.txt.engram-installer-old`. It can also add Poppins and Righteous, the two fonts its own text is in, to Engram's fonts folder. **Check for a new version** asks GitHub for the latest release, and when there's a newer one, downloads its installer, checks it against the SHA-256 GitHub lists and puts it in place of the one running.
+
+### Improved
+
+- **Fonts > Apps sets itself up:** giving an app a font adds Engram's line under that app in taiHEN's `config.txt`, and setting it back to System Font takes it out. Engram keeps a copy from before each change (`config.txt.engram-old`) and the original (`ur0:data/engram/tai_config_original.txt`).
+- **Place fonts with the Live Area on System Font:** the lock screen, status bar, boot warning and quick menu can have fonts of their own while the rest of the home screen keeps the system font. In this setup Chinese text on the home screen uses the Japanese font's kanji, and Korean letters show as blanks.
+- Place fonts go in once a boot, and places on the same font share one copy of it. Fonts up to 128 KB are read into the home screen's memory; bigger ones are opened from their files instead, which saves memory but holds the file open.
+- The Settings page can show under `*NPXS10016` too, the title ID Settings has when the system or another app opens it.
+- A **Logging** switch in Settings.
+
+### Changed
+
+- An app with no font chosen keeps the system font. Choose Same as Live Area for it to follow the Live Area font, as it did in 1.5 by default.
+
+### Fixed
+
+- With a Live Area font set, Photos, Music and Camera wouldn't start (#3). The home screen no longer opened the system's shared fonts, which those apps rely on; Engram now opens them.
+- After a quarter of an hour or so, place fonts could stop changing and the log grew by megabytes: each new font object left a system font open until Paf's font library was full.
+- With the Live Area on System Font, a place's font could come out blank.
+- A place whose font couldn't be opened showed one of the system's decorative fonts (the quick menu in a script font). It now keeps the Live Area font, or the system font.
+
 ## 1.5
 
 The second public release.

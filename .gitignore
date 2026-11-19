@@ -1,3 +1,15 @@
 build/
 *.suprx
 *.velf
+
+# the installer: generated pictures and pages (the scripts beside them make them again)
+installer/design/out/
+installer/preview/*.rgba
+installer/preview/page_scripts.js
+installer/preview/installer-preview.html
+installer/test/cases.h
+installer/test/expect_files.txt
+installer/test/*.elf
+
+# a console screenshot of the app's page, which make_mockups.py draws its designs over: take your own
+installer/design/vita_screenshot.png

@@ -1,4 +1,6 @@
 // The Settings app (NPXS10015) half of Engram: adds Settings > System > Engram.
+// The same app also runs as NPXS10016 when the system or another app opens it
+// through its settings_dlg: link (app.db), so Engram is listed under both.
 //
 // The same recipe as HENkaku's settings page and Turbo Storage's
 // (github.com/juanjsebgarcia/vita-turbo-storage, MIT): hook SceSettings'
@@ -11,6 +13,7 @@
 // They are all import hooks that pass anything not ours straight through, so if
 // something doesn't match on this firmware the page just doesn't appear.
 
+#include <psp2/appmgr.h>
 #include <psp2/io/dirent.h>
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
@@ -103,18 +106,30 @@ static int font_index(void) {
 	return 0;
 }
 
-// An app's list in Font > Apps: 0 Same as Live Area, 1 System Font, then
-// font_files[i - 2].
-static int app_font_index(int app) {
-	const char *f = cfg.app_font[app];
-	if (!f[0])
-		return 0;
-	if (str_eq(f, FONT_APP_SYSTEM))
+// A place's list (Lock Screen...) and an app's in Font > Apps: 0 System Font,
+// 1 Same as Live Area, then font_files[i - 2].
+static int choice_index(const char *f) {
+	if (str_eq(f, FONT_SAME))
 		return 1;
-	for (int i = 0; i < font_count; i++)
+	for (int i = 0; f[0] && i < font_count; i++)
 		if (str_eq(font_files[i], f))
 			return i + 2;
-	return 0;
+	return 0; // "", FONT_SYSTEM, or a font that's gone
+}
+
+// The choice for item value of such a list, into f.
+static void set_choice(char *f, int value) {
+	if (value == 1)
+		sceClibStrncpy(f, FONT_SAME, FONT_NAME_MAX - 1);
+	else if (value >= 2 && value <= font_count + 1)
+		sceClibStrncpy(f, font_files[value - 2], FONT_NAME_MAX - 1);
+	else
+		f[0] = '\0';
+	f[FONT_NAME_MAX - 1] = '\0';
+}
+
+static const char *choice_name(const char *f) {
+	return str_eq(f, FONT_SAME) ? "(same as Live Area)" : f[0] && !str_eq(f, FONT_SYSTEM) ? f : "system";
 }
 
 // ---- the page ----
@@ -179,6 +194,7 @@ static void open_page(const char *id) {
 
 // Engram
 //   Engram                switch: off while ur0:data/engram/disabled exists (the crash guard's file)
+//   Logging               switch: off while ur0:data/engram/nolog exists
 //   Live Area
 //     Scroll Animations   switch, Effects (one switch each), Randomize, Fade Out, Intensity, 3D Icon Tilt
 //     Motion Depth        switch, Style, Strength (Shadows, Wallpaper Parallax: shelved)
@@ -193,6 +209,7 @@ static void build_group(bool app_fonts, bool apps_note = false, bool place_fonts
 	put("<setting_list id=\"engram_settings\" title=\"eg_p_title\" icon=\"tex_spanner\">");
 
 	put_toggle(KEY_ENGRAM_ON);
+	put_toggle(KEY_LOGGING);
 
 	open_page("livearea");
 
@@ -244,11 +261,11 @@ static void build_group(bool app_fonts, bool apps_note = false, bool place_fonts
 	// fonts to use and where.
 	open_page("font");
 	put_list(KEY_FONT, "font", font_count + 1);
-	// Lock Screen, Status Bar...: Same as Live Area, then the fonts.
+	// Lock Screen, Status Bar...: System Font, Same as Live Area, then the fonts.
 	for (int p = 0; place_fonts && p < PLACES_SHOWN; p++) {
 		char prefix[16];
 		sceClibSnprintf(prefix, sizeof(prefix), "fpl%dx", p);
-		put_list(PLACE_KEYS[p], prefix, font_count + 1);
+		put_list(PLACE_KEYS[p], prefix, font_count + 2);
 	}
 	if (app_fonts) {
 		open_page("fontapps");
@@ -405,6 +422,8 @@ static const char *page_title(const char *id) {
 static const char *title_for(const char *key) {
 	if (str_eq(key, KEY_ENGRAM_ON))
 		return "Engram";
+	if (str_eq(key, KEY_LOGGING))
+		return "Logging";
 	if (str_eq(key, KEY_ENABLED))
 		return "Scroll Animations";
 	if (str_eq(key, KEY_RANDOM))
@@ -460,6 +479,10 @@ static const char *title_for(const char *key) {
 }
 
 #define PLACE_SIZE_NOTE "Fonts marked too big (over 1 MB) are left out: the Live Area hasn't the memory."
+// What a place shows where its own font doesn't: SceShell's base font (font.cpp, font_shell).
+#define PLACE_BASE_NOTE                                                                                     \
+	"Letters it doesn't have come from the Live Area font, and so does all of it on System Font or Same as " \
+	"Live Area (the system font while the Live Area is on System Font)."
 #define CRASH_GUARD_HINT "Engram turned itself off after two boots in a row that didn't finish. Turn this on, then restart, to try again."
 
 static const char *hint_for(const char *key) {
@@ -474,6 +497,10 @@ static const char *hint_for(const char *key) {
 		       "the setting you think caused the crash, turn it back on and restart the Vita. If you had a crash and "
 		       "this turned off by itself, please send the log in ur0:data/engram to my GitHub: "
 		       "github.com/chazzarchibald-ops/engram-vita/issues";
+	if (str_eq(key, KEY_LOGGING))
+		return "Engram writes what it does to ur0:data/engram/log.txt, which helps track down crashes. Turn this off "
+		       "if the home screen feels slow. If you're reporting a problem, turn it back on first and make the "
+		       "problem happen again, so the log shows it.";
 	if (str_eq(key, KEY_ENABLED))
 		return "Animate the home screen's icons as you scroll between pages.";
 	if (str_eq(key, KEY_RANDOM))
@@ -498,24 +525,26 @@ static const char *hint_for(const char *key) {
 	if (str_eq(key, KEY_APP_ENABLED))
 		return "Animate an app's page as you swipe left and right between the home screen and the apps you've opened.";
 	if (str_eq(key, KEY_FONT))
-		return "The font for the Live Area and its app pages, and for the lock screen, status bar and notifications, "
-		       "boot warning, quick menu and apps left on Same as Live Area. Restart the Vita to apply. " PLACE_SIZE_NOTE;
+		return "The home screen's font: the Live Area, its folders and the apps' LiveArea pages, its dialogs and "
+		       "keyboard, and the lock screen, status bar, boot warning and quick menu unless you give them a font "
+		       "of their own. Apps keep theirs. Letters it doesn't have show as blanks. Restart the Vita to apply. "
+		       PLACE_SIZE_NOTE;
 	if (font_app_key(key) >= 0)
 		return "This app's font. Same as Live Area follows the Live Area font. Applies the next time the app "
-		       "starts.";
+		       "starts. Engram adds its line for the app to taiHEN's config.txt, and takes it out again on System "
+		       "Font.";
 	if (place_key(key) == PLACE_LOCK)
-		return "The font for the lock screen's clock and date. Letters it doesn't have come from the Live Area "
-		       "font. Restart the Vita to apply. " PLACE_SIZE_NOTE;
+		return "The font for the lock screen's clock and date. " PLACE_BASE_NOTE " Restart the Vita to apply. "
+		       PLACE_SIZE_NOTE;
 	if (place_key(key) == PLACE_STATUS)
 		return "The font for the status bar at the top of the screen (the clock and the battery) and for the "
-		       "notifications. Letters it doesn't have come from the Live Area font. Restart the Vita to apply. "
-		       PLACE_SIZE_NOTE;
+		       "notifications. " PLACE_BASE_NOTE " Restart the Vita to apply. " PLACE_SIZE_NOTE;
 	if (place_key(key) == PLACE_WARNING)
-		return "The font for the warning the Vita shows as it starts, before the lock screen. Letters it doesn't "
-		       "have come from the Live Area font. Restart the Vita to see it. " PLACE_SIZE_NOTE;
+		return "The font for the warning the Vita shows as it starts, before the lock screen. " PLACE_BASE_NOTE
+		       " Restart the Vita to see it. " PLACE_SIZE_NOTE;
 	if (place_key(key) == PLACE_QUICK)
-		return "The font for the quick menu you open by holding the PS button. Letters it doesn't have come from "
-		       "the Live Area font. Restart the Vita to apply. " PLACE_SIZE_NOTE;
+		return "The font for the quick menu you open by holding the PS button. " PLACE_BASE_NOTE
+		       " Restart the Vita to apply. " PLACE_SIZE_NOTE;
 	if (str_eq(key, KEY_WALL_LAYER))
 		return "For testing: which part of the home screen carries your wallpaper. Try each one while tilting the "
 		       "Vita and note which one moves the wallpaper.";
@@ -548,7 +577,7 @@ static const char *hint_for(const char *key) {
 
 // eg_i_<prefix><digit>
 static const char *item_text(const char *id) {
-	// A place's list (Lock Screen...): fpl<place>x<item>, 0 Same as Live Area.
+	// A place's list (Lock Screen...): fpl<place>x<item>, as choice_index.
 	if (str_starts(id, "fpl")) {
 		const char *n = id + 3;
 		int place = 0, value = 0, digits = 0;
@@ -561,11 +590,11 @@ static const char *item_text(const char *id) {
 			digits = 0;
 			while (n[digits] >= '0' && n[digits] <= '9' && digits < 3)
 				value = value * 10 + (n[digits++] - '0');
-			if (digits > 0 && !n[digits] && value <= font_count)
-				return value == 0 ? "Same as Live Area" : place_names[value - 1];
+			if (digits > 0 && !n[digits] && value <= font_count + 1)
+				return value == 0 ? "System Font" : value == 1 ? "Same as Live Area" : place_names[value - 2];
 		}
 	}
-	// An app's list in Font > Apps: fapp<app>x<item>.
+	// An app's list in Font > Apps: fapp<app>x<item>, as choice_index.
 	if (str_starts(id, "fapp")) {
 		const char *n = id + 4;
 		int app = 0, value = 0, digits = 0;
@@ -579,7 +608,7 @@ static const char *item_text(const char *id) {
 			while (n[digits] >= '0' && n[digits] <= '9' && digits < 3)
 				value = value * 10 + (n[digits++] - '0');
 			if (digits > 0 && !n[digits] && value <= font_count + 1)
-				return value == 0 ? "Same as Live Area" : value == 1 ? "System Font" : font_files[value - 2];
+				return value == 0 ? "System Font" : value == 1 ? "Same as Live Area" : font_files[value - 2];
 		}
 	}
 	// The Live Area list's items: the fonts found, not a fixed list.
@@ -616,11 +645,12 @@ static const char *text_for(const char *id) {
 	if (str_eq(id, "eg_an_text"))
 		return "Turbo Storage leaves the System page alone if it's over 16 KB, and Fonts > Apps would make it "
 		       "bigger. To have both, move ur0:tai/engram.suprx up to straight after ur0:tai/henkaku.suprx under "
-		       "*NPXS10015 in ur0:tai/config.txt, then restart the Vita.";
+		       "*NPXS10015 and *NPXS10016 in ur0:tai/config.txt, then restart the Vita.";
 	if (str_eq(id, "eg_fn_text"))
 		return "Put .ttf or .otf fonts in ur0:data/engram/fonts. Use a font with your language's letters, or a "
 		       "multi-language one if you use more than one (English and Japanese, say): missing letters show "
-		       "as blanks or boxes. An app's own font needs Engram listed under that app in ur0:tai/config.txt.";
+		       "as blanks or boxes. An app's font needs Engram loaded into it: Engram lists itself under the app in "
+		       "taiHEN's config.txt when the app gets a font, and takes itself out on System Font.";
 	if (str_eq(id, "eg_c_text"))
 		return "Engram by badmanwazzy37. Scroll Animations are a faithful port of Cylinder for iOS by Reed "
 		       "Weichler (rweichler). Motion Depth is inspired by ShadowBoard for iOS.";
@@ -728,20 +758,20 @@ static int reg_get_int_patched(const char *category, const char *name, int *valu
 		*value = file_exists(DISABLED_PATH) ? 0 : 1;
 		return 0;
 	}
+	if (is_ours(category) && value && str_eq(name, KEY_LOGGING)) {
+		*value = file_exists(NOLOG_PATH) ? 0 : 1;
+		return 0;
+	}
 	if (is_ours(category) && value && str_eq(name, KEY_FONT)) {
 		*value = font_index();
 		return 0;
 	}
 	if (is_ours(category) && value && place_key(name) >= 0) {
-		const char *f = cfg.place_font[place_key(name)];
-		*value = 0;
-		for (int i = 0; f[0] && i < font_count; i++)
-			if (str_eq(font_files[i], f))
-				*value = i + 1;
+		*value = choice_index(cfg.place_font[place_key(name)]);
 		return 0;
 	}
 	if (is_ours(category) && value && font_app_key(name) >= 0) {
-		*value = app_font_index(font_app_key(name));
+		*value = choice_index(cfg.app_font[font_app_key(name)]);
 		return 0;
 	}
 	if (is_ours(category) && value) {
@@ -767,6 +797,19 @@ static int reg_set_int_patched(const char *category, const char *name, int value
 		         value ? "removed " DISABLED_PATH : "wrote " DISABLED_PATH, (unsigned)ret);
 		return 0;
 	}
+	if (is_ours(category) && str_eq(name, KEY_LOGGING)) {
+		// The line goes in while logging is on: after turning it on, before turning it off.
+		if (value) {
+			int ret = sceIoRemove(NOLOG_PATH);
+			log_recheck();
+			log_line("set Logging on: removed " NOLOG_PATH " (0x%08X)\n", (unsigned)ret);
+		} else {
+			log_line("set Logging off: writing " NOLOG_PATH "\n");
+			write_marker(NOLOG_PATH);
+			log_recheck();
+		}
+		return 0;
+	}
 	if (is_ours(category) && str_eq(name, KEY_FONT)) {
 		if (value <= 0 || value > font_count)
 			cfg.font_file[0] = '\0';
@@ -774,32 +817,24 @@ static int reg_set_int_patched(const char *category, const char *name, int value
 			sceClibStrncpy(cfg.font_file, font_files[value - 1], FONT_NAME_MAX - 1);
 		int ret = config_save(&cfg);
 		log_line("set font = %s: save 0x%08X\n", cfg.font_file[0] ? cfg.font_file : "(system)", ret);
+		tai_sync(&cfg); // apps on Same as Live Area follow it
 		return 0;
 	}
 	if (is_ours(category) && place_key(name) >= 0) {
 		int place = place_key(name);
 		char *f = cfg.place_font[place];
-		if (value <= 0 || value > font_count)
-			f[0] = '\0';
-		else
-			sceClibStrncpy(f, font_files[value - 1], FONT_NAME_MAX - 1);
-		f[FONT_NAME_MAX - 1] = '\0';
+		set_choice(f, value);
 		int ret = config_save(&cfg);
-		log_line("set %s font = %s: save 0x%08X\n", PLACE_NAMES[place], f[0] ? f : "(same as home)", ret);
+		log_line("set %s font = %s: save 0x%08X\n", PLACE_NAMES[place], choice_name(f), ret);
 		return 0;
 	}
 	if (is_ours(category) && font_app_key(name) >= 0) {
 		int app = font_app_key(name);
 		char *f = cfg.app_font[app];
-		if (value <= 0 || value > font_count + 1)
-			f[0] = '\0';
-		else if (value == 1)
-			sceClibStrncpy(f, FONT_APP_SYSTEM, FONT_NAME_MAX - 1);
-		else
-			sceClibStrncpy(f, font_files[value - 2], FONT_NAME_MAX - 1);
-		f[FONT_NAME_MAX - 1] = '\0';
+		set_choice(f, value);
 		int ret = config_save(&cfg);
-		log_line("set %s font = %s: save 0x%08X\n", FONT_APPS[app].name, f[0] ? f : "(same as home)", ret);
+		log_line("set %s font = %s: save 0x%08X\n", FONT_APPS[app].name, choice_name(f), ret);
+		tai_sync(&cfg);
 		return 0;
 	}
 	if (is_ours(category)) {
@@ -846,7 +881,7 @@ static void *get_text_patched(void *arg, char **id) {
 // straight after the head (taiHEN patches.c, hooks_add_hook). A 1.1 test
 // build took the head with a pass-through hook so Engram's would run last;
 // that moved HENkaku's after Tweaks' and Tweaks' entry disappeared. Where
-// Engram runs among them follows its line under *NPXS10015 in
+// Engram runs among them follows its line under *NPXS10015 (and *NPXS10016) in
 // ur0:tai/config.txt: listed straight after henkaku.suprx, its hook runs
 // after Turbo Storage's. See load_xml_patched for when it doesn't.
 static SceUID load_start_module_patched(const char *path, SceSize args, void *argp, int flags, void *option,
@@ -877,7 +912,13 @@ static SceUID load_start_module_patched(const char *path, SceSize args, void *ar
 }
 
 void settings_start(void) {
-	log_line("\n== Engram " ENGRAM_VERSION " in Settings\n");
+	// Which of Settings' two title ids this is (NPXS10015, or NPXS10016 when
+	// it was opened through settings_dlg:), as the app logs show theirs.
+	char title[16];
+	sceClibMemset(title, 0, sizeof(title));
+	if (sceAppMgrAppParamGetString(0, 12, title, sizeof(title) - 1) < 0 || !title[0])
+		sceClibStrncpy(title, "id unknown", sizeof(title) - 1);
+	log_line("\n== Engram " ENGRAM_VERSION " in Settings (%s)\n", title);
 	config_load(&cfg);
 	sceIoMkdir(FONT_DIR, 0777);
 	list_fonts();

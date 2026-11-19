@@ -2042,21 +2042,34 @@ static void font_probe(void) {
 
 // ---- Place fonts ----
 //
-// Font > Lock Screen and Status Bar: a font of their own for one part of
-// SceShell. Paf draws a character from a text's family font first, when its
-// family is above 0 and that font has the character, and from the four
-// language slots otherwise (ScePaf 0xE03A461C), so a letter the place's font
-// lacks comes from the Home Screen font. Each place's text widgets move to a
-// family of its own that nothing else uses (before Engram, the font cache
-// only ever held the four language slots, kinds 0x30000-0x30003), and once
-// Paf has opened that family's font (kind family + 0xFFFE in its font cache,
-// a std::map), the place's font goes in that font object instead, opened
-// with Paf's own font library. It's all SceShell's own memory: nothing apps
-// share is patched. Paf keeps at most four unused font objects and closes a
-// font when it drops one, so each new font object for a family gets a fresh
-// copy of the font. The 1.1 lock screen test (PressStart2P on family 5)
-// worked on the console. The place's text is checked every PL_EVERY frames,
+// Font > Lock Screen, Status Bar & Notifications, Boot Warning, Quick Menu: a
+// font of their own for one part of SceShell, on top of SceShell's base font
+// (font.cpp, font_shell: the Live Area's font, or the system's). Paf draws a
+// character from a text's family font first, when its family is above 0 and
+// that font has the character, and from the language slots otherwise (ScePaf
+// 0xE03A461C), so a letter the place's font lacks comes from the base font.
+// Each place's text widgets move to a family of their own that nothing else
+// uses (before Engram, the font cache only ever held the language slots), and
+// once Paf has opened that family's font (kind family + 0xFFFE in its font
+// cache, a std::map), the place's font goes in that font object instead,
+// opened with Paf's own font library. It's all SceShell's own memory: nothing
+// apps share is patched. The place's text is checked every PL_EVERY frames,
 // as SceShell replaces it (the clock each minute).
+//
+// What the tests with SceShell on the system font found (2026-11-17):
+// - Engram calls nothing in the font library but its opens. Asking a font for
+//   a glyph, or closing one, ran into Paf's own use of the library and crashed
+//   SceShell: at the boot warning's swap (early frame 3), at the lock screen's,
+//   and as apps were opened (a close that was due then).
+// - Each place's font object is pinned (Pinning, below), so Paf never drops
+//   it: a place swaps once a boot, and the system font Paf opened for it stays
+//   open, one a place.
+// - Paf's Hangul and Chinese slots get a font of Engram's (font.cpp): left
+//   empty, Paf opened system fonts by number for them again and again, and
+//   each time the place font that had just gone in drew nothing.
+// - The Live Area as a place crashed SceShell again and again (Lobster, in
+//   font objects Paf kept making anew). Its font is SceShell's base font
+//   instead, as before 2026-11-16.
 //
 // ScePaf loads at a different address each boot (Text::GetTypeName was at
 // 0xE032F61B one boot and 0xE033A22B the next), so the first test, which read
@@ -2074,8 +2087,14 @@ static void font_probe(void) {
 #define PAF_DATA_SIZE 0x166D0
 #define PAF_LOADS_LIB 0x19B18E   // 0xE03A3DAE: movw/movt r0, the lib pointer
 #define PAF_LOADS_CACHE 0x19B24A // 0xE03A3E6A: movw/movt r2, the cache
+// Paf's language slots in its data (the dump's 0xE0176458, 0x30 a slot): a
+// slot's shared font id is at +0x18, its font in memory at +4.
+#define PAF_SLOTS 0x154E8
+#define PAF_SLOT_SIZE 0x30
+#define PAF_SLOT_MEMORY 0x4
+#define PAF_SLOT_SHARED_ID 0x18
 
-static uint32_t paf_pvf_lib, paf_font_cache; // found at run time, 0 if not
+static uint32_t paf_pvf_lib, paf_font_cache, paf_slots; // found at run time, 0 if not
 
 // A Thumb-2 movw/movt pair into one register: its 32-bit value, or 0.
 static uint32_t thumb_movw_movt(uint32_t at, int reg) {
@@ -2111,6 +2130,7 @@ static bool find_paf_font_data(void) {
 		return false;
 	paf_pvf_lib = lib;
 	paf_font_cache = cache;
+	paf_slots = data + PAF_SLOTS;
 	return true;
 }
 
@@ -2125,6 +2145,8 @@ struct PlaceDef {
 	const char *what;
 	uint32_t root; // only this widget and what's under it, or 0 for the whole scene
 };
+// The places of enum PlaceId. Families 2-9 are the ones Paf opens a font of
+// its own for; the Live Area's text keeps family 0, the base font.
 static const PlaceDef PLACE_DEFS[PLACE_COUNT] = {
 	{"power_manage_plugin", 0xA3C0A317, 5, "lock screen"}, // clock, date
 	// The status bar and the notifications, one scene. Limiting the font to
@@ -2135,14 +2157,42 @@ static const PlaceDef PLACE_DEFS[PLACE_COUNT] = {
 	{"power_manage_plugin", 0xB4093C4B, 8, "quick menu"},  // its texts are made as it first opens
 };
 static struct {
-	void *data;
+	void *data; // the font read into memory, only if opening its file failed
 	SceSize size;
-	uint32_t obj; // the family's font object last given the font
-	int on, logs, retags;
+	uint32_t obj;      // the family's font object last given the font
+	ScePvfFontId font; // the font put in it, or the one it had if that didn't work
+	int on, logs, retags, swap_logs, open_logs;
+	// Places with the same font file share one family, its font object and
+	// the one copy of the font in it: the first of them (owner) swaps. Each
+	// font Paf opens from a file holds that file open, and with a font object
+	// a place, SceShell ran out (2026-11-17: the quick menu's Righteous, the
+	// third copy, failed with SCE_PVF_ERROR_FILEOPEN, and SceShell's FTP
+	// stopped answering).
+	int fam, owner;
+	bool failed;       // its font didn't open: its text goes back to family 0
+	bool swapped;      // font is the place's own
+	bool relayout;     // its texts are being laid out again (place_relayout_step)
+	int relayout_from, relayout_logs;
+	uint32_t relayout_since;
 } places[PLACE_COUNT];
+
+// The font file a place has: "" for none of its own. A place on the Live
+// Area's font has nothing to swap: that's the base font already.
+static const char *place_file(int p) {
+	const char *file = font_for_place(&cfg, p);
+	return cfg.font_file[0] && str_eq(file, cfg.font_file) ? "" : file;
+}
+
+// The system fonts Paf opened for the places' font objects, which the swaps
+// leave open: never closed (see above), and one a place with the objects
+// pinned. Left open with every new font object, they filled Paf's font
+// library after 13 swaps, a quarter of an hour in (1.5, 2026-11-13), and
+// every swap after that failed with SCE_PVF_ERROR_TOOMANYOPENED; past
+// PL_LEFT_OPEN, a new font object keeps the system's font.
+#define PL_LEFT_OPEN 16
+static int left_open_count;
 static int places_ready; // 0 not tried, 1 running, -1 off
 static unsigned early_frames; // Paf's frames before on_frame starts (see early_frame)
-static int pt_dumps;
 
 // SceShell's free memory, in KB: logged as the place fonts load.
 static int free_kb(void) {
@@ -2154,14 +2204,12 @@ static int free_kb(void) {
 	return info.size_user / 1024;
 }
 
-static bool place_load(int p, const char *file) {
-	// A font another place already has is shared, not loaded again.
-	for (int q = 0; q < p; q++)
-		if (places[q].on && str_eq(cfg.place_font[q], file)) {
-			places[p].data = places[q].data;
-			places[p].size = places[q].size;
-			return true;
-		}
+// Whether a place's font is there, and small enough. Only a small one is read
+// into memory (place_open, PL_MEMORY_MAX): SceShell has next to nothing to
+// spare on a console with many icons, and with 735 KB of place fonts read in
+// (Lobster and Pacifico, user test 2026-11-17), its free memory read 19 MB
+// instead of 20 and it crashed on two boots, as with a 1 MB bigger font heap.
+static bool place_check(int p, const char *file) {
 	char path[128];
 	sceClibSnprintf(path, sizeof(path), FONT_DIR "/%s", file);
 	SceIoStat st;
@@ -2172,6 +2220,25 @@ static bool place_load(int p, const char *file) {
 		         (unsigned)(st.st_size / 1024), (unsigned)(PLACE_FONT_MAX / 1024));
 		return false;
 	}
+	places[p].size = (SceSize)st.st_size;
+	return true;
+}
+
+static bool place_load(int p, const char *file) {
+	if (places[p].data)
+		return true;
+	// A font another place already has is shared, not loaded again.
+	for (int q = 0; q < PLACE_COUNT; q++)
+		if (q != p && places[q].on && places[q].data && str_eq(place_file(q), file)) {
+			places[p].data = places[q].data;
+			places[p].size = places[q].size;
+			return true;
+		}
+	char path[128];
+	sceClibSnprintf(path, sizeof(path), FONT_DIR "/%s", file);
+	SceIoStat st;
+	if (sceIoGetstat(path, &st) < 0 || st.st_size <= 0 || st.st_size > PLACE_FONT_MAX)
+		return false;
 	SceSize size = (SceSize)st.st_size;
 	SceUID block = sceKernelAllocMemBlock("EngramPlaceFont", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
 	                                      (size + 0xFFF) & ~0xFFFu, NULL);
@@ -2199,9 +2266,12 @@ static bool place_load(int p, const char *file) {
 }
 
 // The font cache's nodes: parent/root +0, left +4, right +8, kind +0xC,
-// font object +0x10, nil +0x19 (ScePaf 0xE03A3E8E, 0xE0461C34). A font object
-// is {vtable, ScePvfFontId +4, opened +8}.
-static uint32_t pt_find(uint32_t kind) {
+// font object +0x10 and its shared pointer's control block +0x14 (use count
+// +4, weak count +8), nil +0x19 (ScePaf 0xE03A3E8E, 0xE0461C34). A font
+// object is {vtable, ScePvfFontId +4, opened +8}. Paf orders the kinds as
+// signed numbers (0xE03A3E9C), so the shared fonts' 0xFFFF0000 and up come
+// first.
+static uint32_t pt_node(uint32_t kind) {
 	uint32_t head = *(const uint32_t *)paf_font_cache;
 	if (!looks_like_object((void *)head))
 		return 0;
@@ -2209,39 +2279,45 @@ static uint32_t pt_find(uint32_t kind) {
 	for (int steps = 0; steps < 64 && looks_like_object((void *)node) && !*(const int8_t *)(node + 0x19); steps++) {
 		uint32_t key = *(const uint32_t *)(node + 0xC);
 		if (kind == key)
-			return *(const uint32_t *)(node + 0x10);
-		node = *(const uint32_t *)(node + (kind < key ? 4 : 8));
+			return node;
+		node = *(const uint32_t *)(node + ((int32_t)kind < (int32_t)key ? 4 : 8));
 	}
 	return 0;
 }
 
-static void pt_dump(const char *when) {
-	if (pt_dumps >= 8)
+static uint32_t pt_find(uint32_t kind) {
+	uint32_t node = pt_node(kind);
+	return node ? *(const uint32_t *)(node + 0x10) : 0;
+}
+
+// ---- Pinning ----
+//
+// When Paf needs a font object for a kind its font cache hasn't got and the
+// cache has 4 or more, it drops the first one nothing else uses (use count
+// 1, ScePaf 0xE03A3F8A), which closes its font, then makes the new one
+// (0xE03A4050). A place's font object went that way whenever its scene was
+// hidden a while, and came back as a new one with Paf's system font in it, to
+// be swapped again. A pinned object has a use Engram added and never takes
+// back, so it's never dropped: each place's, once it has Engram's font. The
+// cache grows past 4 instead.
+#define PL_PINS 16
+static uint32_t pinned[PL_PINS]; // control blocks
+static int pinned_count;
+
+static void pt_pin(uint32_t node, const char *why) {
+	uint32_t ctrl = *(const uint32_t *)(node + 0x14), obj = *(const uint32_t *)(node + 0x10);
+	if (!looks_like_object((void *)ctrl) || !looks_like_object((void *)obj))
 		return;
-	pt_dumps++;
-	uint32_t head = *(const uint32_t *)paf_font_cache, size = *(const uint32_t *)(paf_font_cache + 4);
-	if (!looks_like_object((void *)head))
+	for (int i = 0; i < pinned_count; i++)
+		if (pinned[i] == ctrl)
+			return;
+	if (pinned_count >= PL_PINS)
 		return;
-	char line[256];
-	int len = sceClibSnprintf(line, sizeof(line), "place fonts: font cache %s: %u entries:", when, (unsigned)size);
-	uint32_t stack[32];
-	int top = 0, shown = 0;
-	uint32_t root = *(const uint32_t *)head;
-	if (looks_like_object((void *)root) && !*(const int8_t *)(root + 0x19))
-		stack[top++] = root;
-	while (top > 0 && shown < 12 && len < (int)sizeof(line) - 40) {
-		uint32_t node = stack[--top];
-		uint32_t obj = *(const uint32_t *)(node + 0x10);
-		len += sceClibSnprintf(line + len, sizeof(line) - len, " %X=%08X", *(const unsigned *)(node + 0xC),
-		                       looks_like_object((void *)obj) ? *(const unsigned *)(obj + 4) : 0);
-		shown++;
-		for (int side = 4; side <= 8; side += 4) {
-			uint32_t next = *(const uint32_t *)(node + side);
-			if (top < 32 && looks_like_object((void *)next) && !*(const int8_t *)(next + 0x19))
-				stack[top++] = next;
-		}
-	}
-	log_line("%s\n", line);
+	pinned[pinned_count++] = ctrl;
+	int uses = __atomic_add_fetch((int *)(ctrl + 4), 1, __ATOMIC_SEQ_CST);
+	log_line("place fonts: pinned the font object for kind %X (%08X, font %08X) for %s at frame %u: %d uses\n",
+	         (unsigned)*(const uint32_t *)(node + 0xC), (unsigned)obj, (unsigned)*(const uint32_t *)(obj + 4), why,
+	         (unsigned)frame, uses);
 }
 
 // Text that isn't a ui::Text: a widget's draw objects that are graph::TextObj,
@@ -2311,8 +2387,27 @@ static void label_text(void *label, char *out, int size, unsigned *len_out) {
 	*len_out = len;
 }
 
+// Texts moved to a place's family, or laid out again, a pass: see
+// place_relayout. The ones not reached this pass are next pass's.
+#define PL_TEXTS_PER_PASS 2
+static int pl_budget; // retags left this pass
+
+// The family a place's text goes to: its group's (places[p].fam), or back
+// to 0, the base font, once its font didn't open. Left in the family, it was
+// drawn in the system font Paf opened for it, one of its decorative ones (the
+// quick menu came out in a script font, 2026-11-17).
+static int retag_target(int p) {
+	return places[p].failed ? 0 : places[p].fam;
+}
+
+// Whether a text in this family moves: every one that isn't in the place's
+// family yet, or, once its font didn't open, the ones that are.
+static bool retag_wanted(int p, int family) {
+	return places[p].failed ? family == places[p].fam : family != places[p].fam;
+}
+
 static void place_retag(int p, ui::Widget *w, int depth) {
-	if (!looks_like_object(w) || depth > FP_DEPTH)
+	if (!looks_like_object(w) || depth > FP_DEPTH || pl_budget <= 0)
 		return;
 	if (!fp_is_text(w)) {
 		void *objs[4];
@@ -2350,15 +2445,16 @@ static void place_retag(int p, ui::Widget *w, int depth) {
 			int family = -1;
 			label_text(label, text, sizeof(text), &len);
 			paf_textobj_style_int(label, 0, 0, &family);
-			if (len > 0 && family != PLACE_DEFS[p].family) {
-				int r = paf_textobj_set_style_int(label, 0 /* Family */, 0, len, PLACE_DEFS[p].family);
+			if (len > 0 && retag_wanted(p, family) && pl_budget > 0) {
+				pl_budget--;
+				int to = retag_target(p);
+				int r = paf_textobj_set_style_int(label, 0 /* Family */, 0, len, to);
 				paf_textobj_invalidate(label);
 				places[p].retags++;
 				if (places[p].logs < PL_LOGS * 3) {
 					places[p].logs++;
 					log_line("place fonts: %s widget %08X's text \"%s\": family %d -> %d (0x%08X) at frame %u\n",
-					         PLACE_DEFS[p].what, (unsigned)id_of(w), text, family, PLACE_DEFS[p].family,
-					         (unsigned)r, (unsigned)frame);
+					         PLACE_DEFS[p].what, (unsigned)id_of(w), text, family, to, (unsigned)r, (unsigned)frame);
 				}
 			}
 		}
@@ -2368,14 +2464,16 @@ static void place_retag(int p, ui::Widget *w, int depth) {
 		int family = -1;
 		paf_text_length(w, &len);
 		paf_text_style_int(w, 0, 0, &family);
-		if (len > 0 && family != PLACE_DEFS[p].family) {
-			int r = paf_text_set_style_int(w, 0 /* Family */, 0, len, PLACE_DEFS[p].family);
+		if (len > 0 && retag_wanted(p, family) && pl_budget > 0) {
+			pl_budget--;
+			int to = retag_target(p);
+			int r = paf_text_set_style_int(w, 0 /* Family */, 0, len, to);
 			paf_text_invalidate(w);
 			places[p].retags++;
 			if (places[p].logs < PL_LOGS) {
 				places[p].logs++;
 				log_line("place fonts: %s text %08X, %u chars: family %d -> %d (0x%08X) at %sframe %u\n",
-				         PLACE_DEFS[p].what, (unsigned)id_of(w), len, family, PLACE_DEFS[p].family, (unsigned)r,
+				         PLACE_DEFS[p].what, (unsigned)id_of(w), len, family, to, (unsigned)r,
 				         frame ? "" : "early ", frame ? (unsigned)frame : early_frames);
 			}
 		}
@@ -2393,24 +2491,46 @@ static void place_retag(int p, ui::Widget *w, int depth) {
 // layout used the system's font for that family: with Lobster swapped in
 // two frames later, the boot warning showed only half its text (user report,
 // 2026-11-13).
-static int place_relayout(int p, ui::Widget *w, int depth) {
-	if (!looks_like_object(w) || depth > FP_DEPTH)
+//
+// A few texts at a time (PL_TEXTS_PER_PASS a pass), in the scene's order. The
+// Live Area test (Lobster, 2026-11-17) crashed SceShell soon after its 31
+// texts were laid out again in one frame, mid-scroll; the user suggested
+// changing them as they're needed. Retags (place_retag) take from the same
+// budget.
+//
+// Whether this text is laid out again now: skip the ones done in earlier
+// passes, then take from the budget; once it's gone, there's more to do.
+static bool relayout_turn(int *skip, int *budget, bool *more) {
+	if (*skip > 0) {
+		(*skip)--;
+		return false;
+	}
+	if (*budget > 0) {
+		(*budget)--;
+		return true;
+	}
+	*more = true;
+	return false;
+}
+
+static int place_relayout(int p, ui::Widget *w, int depth, int *skip, int *budget, bool *more) {
+	if (!looks_like_object(w) || depth > FP_DEPTH || *more)
 		return 0;
 	int done = 0;
 	if (fp_is_text(w)) {
 		int family = -1;
 		paf_text_style_int(w, 0, 0, &family);
-		if (family == PLACE_DEFS[p].family) {
+		if (family == places[p].fam && relayout_turn(skip, budget, more)) {
 			paf_text_invalidate(w);
 			done++;
 		}
 	} else {
 		void *objs[4];
 		int count = widget_text_objs(w, objs, 4);
-		for (int k = 0; k < count; k++) {
+		for (int k = 0; k < count && !*more; k++) {
 			int family = -1;
 			paf_textobj_style_int(objs[k], 0, 0, &family);
-			if (family == PLACE_DEFS[p].family) {
+			if (family == places[p].fam && relayout_turn(skip, budget, more)) {
 				paf_textobj_invalidate(objs[k]);
 				done++;
 			}
@@ -2419,9 +2539,34 @@ static int place_relayout(int p, ui::Widget *w, int depth) {
 	int children = w->GetChildrenNum();
 	if (children < 0 || children > 256)
 		return done;
-	for (int i = 0; i < children; i++)
-		done += place_relayout(p, w->GetChild(i), depth + 1);
+	for (int i = 0; i < children && !*more; i++)
+		done += place_relayout(p, w->GetChild(i), depth + 1, skip, budget, more);
 	return done;
+}
+
+// One pass of the place's texts being laid out again, if it's under way.
+static void place_relayout_step(int p, ui::Widget *scene) {
+	if (!places[p].relayout || !scene)
+		return;
+	int skip = places[p].relayout_from, budget = PL_TEXTS_PER_PASS;
+	bool more = false;
+	places[p].relayout_from += place_relayout(p, scene, 0, &skip, &budget, &more);
+	if (more)
+		return;
+	places[p].relayout = false;
+	if (places[p].relayout_logs < PL_LOGS) {
+		places[p].relayout_logs++;
+		log_line("place fonts: %s: %d texts laid out again, frame %u to %u\n", PLACE_DEFS[p].what,
+		         places[p].relayout_from, (unsigned)places[p].relayout_since, (unsigned)frame);
+	}
+}
+
+// Starts laying the place's texts out again, with the first pass now.
+static void place_relayout_start(int p, ui::Widget *scene) {
+	places[p].relayout = true;
+	places[p].relayout_from = 0;
+	places[p].relayout_since = frame;
+	place_relayout_step(p, scene);
 }
 
 static ui::Scene *place_scene(int p) {
@@ -2441,6 +2586,67 @@ static ui::Scene *place_scene(int p) {
 	return NULL;
 }
 
+// The part of the place's scene that's its own: PlaceDef.root, or the whole scene.
+static ui::Widget *place_root(int p) {
+	ui::Widget *scene = place_scene(p);
+	if (scene && PLACE_DEFS[p].root)
+		return find_widget(scene, PLACE_DEFS[p].root, 0);
+	return scene;
+}
+
+// Opens the place's font with Paf's font library, either way round:
+// - up to PL_MEMORY_MAX, read into memory (place_load) and opened from there,
+//   so it holds no file open. A font opened from its file keeps it open, and
+//   with four of them (two of Engram's, two of Paf's system fonts, the Live
+//   Area on System Font), SceShell's FTP server stopped taking connections
+//   on both boots tried, where with two it was fine (2026-11-17);
+// - bigger, from its file, as Paf opens the family fonts (scePvfOpenUserFile
+//   with the slot's mode, 0 in SceShell; ScePaf 0xE03A3C7C), so it isn't read
+//   into SceShell's memory, which hasn't much to spare either: 735 KB of
+//   place fonts read in crashed it.
+// Each way falls back to the other. A font that opened with an error is
+// closed straight away: it never went near Paf.
+#define PL_MEMORY_MAX (128 * 1024)
+
+static ScePvfFontId place_open_file(int p, void *lib, ScePvfError *err) {
+	static char path[128];
+	sceClibSnprintf(path, sizeof(path), FONT_DIR "/%s", place_file(p));
+	*err = 0;
+	ScePvfFontId font = scePvfOpenUserFile(lib, path, 0, err);
+	if (font && *err) {
+		scePvfClose(font);
+		font = NULL;
+	}
+	return font;
+}
+
+static ScePvfFontId place_open_memory(int p, void *lib, ScePvfError *err) {
+	*err = 0;
+	if (!place_load(p, place_file(p))) {
+		*err = -1;
+		return NULL;
+	}
+	ScePvfFontId font = scePvfOpenUserMemory(lib, places[p].data, places[p].size, err);
+	if (font && *err) {
+		scePvfClose(font);
+		font = NULL;
+	}
+	return font;
+}
+
+static ScePvfFontId place_open(int p, void *lib, ScePvfError *err, const char **how) {
+	bool memory_first = places[p].size <= PL_MEMORY_MAX;
+	ScePvfFontId font = memory_first ? place_open_memory(p, lib, err) : place_open_file(p, lib, err);
+	*how = memory_first ? "from memory" : "from its file";
+	if (font)
+		return font;
+	font = memory_first ? place_open_file(p, lib, err) : place_open_memory(p, lib, err);
+	*how = memory_first ? "from its file, as it couldn't be read into memory," : "from memory, as its file didn't open,";
+	if (!font)
+		*how = "neither from memory nor from its file";
+	return font;
+}
+
 static void place_fonts(void) {
 	// Every frame for the first 2 s, and before on_frame starts (early_frame).
 	if (frame > PL_EARLY && frame % PL_EVERY)
@@ -2448,7 +2654,7 @@ static void place_fonts(void) {
 	if (places_ready == 0) {
 		bool any = false;
 		for (int p = 0; p < PLACE_COUNT; p++)
-			if (PLACE_DEFS[p].plugin && cfg.place_font[p][0])
+			if (place_file(p)[0])
 				any = true;
 		if (!any) {
 			places_ready = -1;
@@ -2461,54 +2667,190 @@ static void place_fonts(void) {
 			log_line("place fonts: Paf isn't the 3.65 build this was written for: off\n");
 			return;
 		}
-		int free_before = free_kb();
 		for (int p = 0; p < PLACE_COUNT; p++) {
-			if (!PLACE_DEFS[p].plugin || !cfg.place_font[p][0])
+			const char *file = place_file(p);
+			if (!file[0])
 				continue;
-			places[p].on = place_load(p, cfg.place_font[p]);
-			log_line("place fonts: %s font %s %s (%u bytes), family %d\n", PLACE_DEFS[p].what, cfg.place_font[p],
-			         places[p].on ? "loaded" : "didn't load", (unsigned)places[p].size, PLACE_DEFS[p].family);
+			places[p].on = place_check(p, file);
+			log_line("place fonts: %s font %s %s (%u bytes), family %d\n", PLACE_DEFS[p].what, file,
+			         places[p].on ? "found" : "missing or too big", (unsigned)places[p].size, PLACE_DEFS[p].family);
 		}
-		log_line("place fonts: SceShell's free memory %d KB before, %d KB after\n", free_before, free_kb());
+		// Places on the same font: the first one's family for all of them.
+		for (int p = 0; p < PLACE_COUNT; p++) {
+			places[p].owner = p;
+			places[p].fam = PLACE_DEFS[p].family;
+			for (int q = 0; q < p && places[p].on; q++)
+				if (places[q].on && str_eq(place_file(q), place_file(p))) {
+					places[p].owner = places[q].owner;
+					places[p].fam = places[q].fam;
+					log_line("place fonts: %s shares %s's font, in family %d\n", PLACE_DEFS[p].what,
+					         PLACE_DEFS[q].what, places[p].fam);
+					break;
+				}
+		}
+		log_line("place fonts: SceShell's free memory %d KB\n", free_kb());
 		places_ready = 1;
-		pt_dump("at the start");
 	}
 	if (places_ready < 0)
 		return;
 	for (int p = 0; p < PLACE_COUNT; p++) {
 		if (!places[p].on)
 			continue;
-		ui::Widget *scene = place_scene(p);
-		if (scene && PLACE_DEFS[p].root)
-			scene = find_widget(scene, PLACE_DEFS[p].root, 0);
-		if (scene)
+		ui::Widget *scene = place_root(p);
+		pl_budget = PL_TEXTS_PER_PASS;
+		if (scene) {
 			place_retag(p, scene, 0);
-		uint32_t obj = pt_find((uint32_t)(PLACE_DEFS[p].family + 0xFFFE));
-		if (obj && looks_like_object((void *)obj) && obj != places[p].obj) {
-			void *lib = *(void *const *)paf_pvf_lib;
-			ScePvfError err = 0;
-			ScePvfFontId font =
-				looks_like_object(lib) ? scePvfOpenUserMemory(lib, places[p].data, places[p].size, &err) : NULL;
-			uint32_t was = *(const uint32_t *)(obj + 4);
-			int relaid = 0;
-			if (font && !err) {
-				*(ScePvfFontId *)(obj + 4) = font;
-				places[p].obj = obj;
-				// The system's font Paf opened for this font object stays open.
-				// Closing it here crashed SceShell at boot twice, straight after the
-				// boot warning's swap (1.1 test, 2026-11-13): something in Paf still
-				// uses it. One is left open per font object Paf makes for a family.
-				if (scene)
-					relaid = place_relayout(p, scene, 0);
-			}
-			log_line("place fonts: %s: family %d's font object %08X had font %08X: now %p (0x%08X) at %sframe %u, "
-			         "%d texts laid out again\n",
-			         PLACE_DEFS[p].what, PLACE_DEFS[p].family, (unsigned)obj, (unsigned)was, font, (unsigned)err,
-			         frame ? "" : "early ", frame ? (unsigned)frame : early_frames, relaid);
-			pt_dump("after a swap");
+			place_relayout_step(p, scene);
+		}
+		if (places[p].owner != p || places[p].failed)
+			continue; // the first place on a font swaps for all of them
+		uint32_t kind = (uint32_t)(places[p].fam + 0xFFFE);
+		uint32_t obj = pt_find(kind);
+		if (!obj || !looks_like_object((void *)obj)) {
+			places[p].obj = 0; // dropped: the next one is new, whatever its address and font
+			places[p].swapped = false;
+			continue;
+		}
+		ScePvfFontId was = *(const ScePvfFontId *)(obj + 4);
+		// A new font object, or one Paf made where the last one was.
+		if (obj == places[p].obj && was == places[p].font)
+			continue;
+		void *lib = *(void *const *)paf_pvf_lib;
+		ScePvfError err = 0;
+		ScePvfFontId font = NULL;
+		const char *how = "";
+		if (left_open_count >= PL_LEFT_OPEN)
+			err = -1; // nowhere to keep the system's font: this one keeps it
+		else if (looks_like_object(lib))
+			font = place_open(p, lib, &err, &how);
+		int relaid = 0;
+		places[p].obj = obj;
+		if (places[p].open_logs < 2) {
+			places[p].open_logs++;
+			log_line("place fonts: %s: opened its font %s: %p (0x%08X)\n", PLACE_DEFS[p].what, how, font,
+			         (unsigned)err);
+		}
+		if (font && !err) {
+			*(ScePvfFontId *)(obj + 4) = font;
+			places[p].font = font;
+			places[p].swapped = true;
+			uint32_t node = pt_node(kind);
+			if (node && *(const uint32_t *)(node + 0x10) == obj)
+				pt_pin(node, PLACE_DEFS[p].what);
+			// The system's font Paf opened for this font object stays open:
+			// Engram closes nothing (see above). Closing it here crashed SceShell
+			// at boot twice, straight after the boot warning's swap (1.1 test,
+			// 2026-11-13).
+			left_open_count++;
+			for (int q = 0; q < PLACE_COUNT; q++)
+				if (places[q].on && places[q].owner == p)
+					place_relayout_start(q, q == p ? scene : place_root(q));
+			relaid = places[p].relayout_from;
+		} else {
+			// Not tried again: the text of every place on this font goes back to
+			// the base font, and Paf can drop the font object once it's unused.
+			places[p].font = was;
+			places[p].swapped = false;
+			if (font)
+				scePvfClose(font); // opened with an error: Paf never had it
+			for (int q = 0; q < PLACE_COUNT; q++)
+				if (places[q].on && places[q].owner == p) {
+					places[q].failed = true;
+					log_line("place fonts: %s: its font didn't open: its text goes back to the base font\n",
+					         PLACE_DEFS[q].what);
+				}
+		}
+		if (places[p].swap_logs < PL_LOGS) {
+			places[p].swap_logs++;
+			log_line("place fonts: %s: family %d's font object %08X had font %p: now %p (0x%08X) at %sframe %u, "
+			         "%d texts laid out again in the first pass, %d system fonts left open%s\n",
+			         PLACE_DEFS[p].what, places[p].fam, (unsigned)obj, was, font, (unsigned)err,
+			         frame ? "" : "early ", frame ? (unsigned)frame : early_frames, relaid, left_open_count,
+			         places[p].swap_logs == PL_LOGS ? " (the last swap logged for this place)" : "");
 		}
 	}
 }
+
+// ---- The system's shared fonts, with a Live Area font ----
+//
+// With the Live Area's font in all four of SceShell's language slots, Paf
+// doesn't open the system's shared default fonts (scePvfOpenDefaultJapanese
+// FontOnSharedMemory and ...LatinFontOnSharedMemory, ScePaf 0xE03A38A0 and
+// 0xE03A38EA, only for a slot with no font in memory and no path): no custom
+// font boot's font cache ever had their kinds, 0xFFFF0000 and 0xFFFF0001.
+// Photos, Music and Camera then wouldn't start, with Engram not even loaded
+// in them (GitHub issue #3, on 1.5; user test 2026-11-17: Camera, only with
+// a Live Area font). So Engram opens both itself, on Paf's font library, as
+// soon as Paf has made it, and leaves them open, as Paf does on the system
+// font. Opening is the one font library call Engram makes (Place fonts).
+static bool shared_wanted, shared_done;
+
+static void open_shared_fonts(void) {
+	if (!shared_wanted || shared_done)
+		return;
+	if (!paf_pvf_lib && !find_paf_font_data()) {
+		shared_done = true;
+		log_line("system fonts: Paf isn't the 3.65 build this was written for: the shared fonts aren't opened\n");
+		return;
+	}
+	void *lib = *(void *const *)paf_pvf_lib;
+	if (!looks_like_object(lib))
+		return; // not made yet: tried again on Paf's next frame
+	shared_done = true;
+	ScePvfError jerr = 0, lerr = 0;
+	ScePvfFontId jp = scePvfOpenDefaultJapaneseFontOnSharedMemory(lib, &jerr);
+	ScePvfFontId lt = scePvfOpenDefaultLatinFontOnSharedMemory(lib, &lerr);
+	log_line("system fonts: opened the shared Japanese font %p (0x%08X) and Latin font %p (0x%08X) at %sframe %u\n",
+	         jp, (unsigned)jerr, lt, (unsigned)lerr, frame ? "" : "early ", frame ? (unsigned)frame : early_frames);
+}
+
+void shell_base_font_in(void) {
+	shared_wanted = true;
+	open_shared_fonts();
+}
+
+// ---- The Hangul and Chinese slots, on the system font ----
+//
+// With SceShell on the system font and place fonts set, Paf's Hangul and
+// Chinese slots (2 and 3) get the shared Japanese font Paf opened for slot 0
+// (font.cpp, font_shell, says why). Paf picks a slot's font kind from its
+// shared id first (ScePaf 0xE03A3CFE: kind slot - 0x10000), before a path,
+// memory or a font by number, and a font object of that kind just uses the
+// shared font: nothing is opened. It's set as Paf's Framework is made, before
+// any text is laid out, or failing that on Paf's first frames.
+static bool cjk_wanted, cjk_done;
+
+static void share_cjk_slots(void) {
+	if (!cjk_wanted || cjk_done)
+		return;
+	if (!paf_slots && !find_paf_font_data()) {
+		cjk_done = true;
+		log_line("system fonts: Paf isn't the 3.65 build this was written for: Hangul and Chinese left alone\n");
+		return;
+	}
+	uint32_t japanese = *(const uint32_t *)(paf_slots + PAF_SLOT_SHARED_ID);
+	if (!japanese)
+		return; // not opened yet: tried again on Paf's next frame
+	cjk_done = true;
+	int set = 0;
+	for (int s = 2; s <= 3; s++) {
+		uint32_t slot = paf_slots + (uint32_t)s * PAF_SLOT_SIZE;
+		if (*(const uint32_t *)(slot + PAF_SLOT_SHARED_ID) || *(const uint32_t *)(slot + PAF_SLOT_MEMORY))
+			continue; // it has a font already
+		*(uint32_t *)(slot + PAF_SLOT_SHARED_ID) = japanese;
+		set++;
+	}
+	log_line("system fonts: %d of the Hangul and Chinese slots now share the Japanese font %08X, at %sframe %u\n", set,
+	         (unsigned)japanese, frame ? "" : "early ", frame ? (unsigned)frame : early_frames);
+}
+
+void shell_share_cjk_slots(void) {
+	cjk_wanted = true;
+	share_cjk_slots();
+}
+#else
+void shell_base_font_in(void) {}
+void shell_share_cjk_slots(void) {}
 #endif
 
 // ---- Boot warning probe ----
@@ -3355,6 +3697,8 @@ static void early_frame(void *arg) {
 	}
 	early_frames++;
 #if ENGRAM_PLACE_FONTS
+	open_shared_fonts();
+	share_cjk_slots();
 	place_fonts();
 #endif
 }
@@ -3408,6 +3752,7 @@ static int poll_thread_entry(SceSize args, void *argp) {
 			         now.enabled, now.random, now.intensity, now.tilt, now.fade_out, now.depth, now.depth_style,
 			         now.depth_strength, now.layout, now.layout_strength);
 		}
+		tai_reload_check(); // after Settings changed Engram's lines in taiHEN's config
 		sceKernelDelayThread(CONFIG_POLL_US);
 	}
 	return sceKernelExitThread(0);
@@ -3494,7 +3839,15 @@ int shell_start(void) {
 		config_save(&cfg);
 	rng_state = (uint32_t)sceKernelGetProcessTimeWide();
 	sceIoMkdir(FONT_DIR, 0777);
-	font_start(cfg.font_file, "SceShell");
+#if ENGRAM_PLACE_FONTS
+	// The Live Area's font is Paf's base font (font.cpp, font_shell).
+	bool fonts = false;
+	for (int p = 0; p < PLACE_COUNT; p++)
+		fonts = fonts || place_file(p)[0];
+	font_shell(cfg.font_file, fonts);
+#else
+	font_shell(cfg.font_file, false);
+#endif
 
 	avconfig_hook = taiHookFunctionImport(&avconfig_ref, "SceShell", LIB_SCEAVCONFIG, NID_SCEAVCONFIGREGISTERCALLBACK,
 	                                      (const void *)sceAVConfigRegisterCallback_patched);

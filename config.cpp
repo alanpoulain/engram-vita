@@ -5,6 +5,7 @@
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <psp2/kernel/clib.h>
+#include <psp2/kernel/processmgr.h>
 #include <stdarg.h>
 
 const char *const EFFECT_KEYS[FX_COUNT] = {
@@ -69,7 +70,29 @@ bool str_starts(const char *s, const char *prefix) {
 	return true;
 }
 
+// Logging's switch is a file (NOLOG_PATH), so every process sees it without
+// reading the config. It's looked at once a second at most: each line written
+// costs an open, a write and a close on the memory card.
+#define LOG_RECHECK_US 1000000
+static int log_on = -1;
+static SceUInt64 log_checked;
+
+void log_recheck(void) {
+	log_on = -1;
+}
+
+static bool log_enabled(void) {
+	SceUInt64 now = sceKernelGetProcessTimeWide();
+	if (log_on < 0 || now - log_checked > LOG_RECHECK_US) {
+		log_on = file_exists(NOLOG_PATH) ? 0 : 1;
+		log_checked = now;
+	}
+	return log_on != 0;
+}
+
 void log_line(const char *fmt, ...) {
+	if (!log_enabled())
+		return;
 	SceUID fd = sceIoOpen(LOG_PATH, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
 	if (fd < 0)
 		return;
@@ -267,15 +290,21 @@ int font_app_key(const char *key) {
 	return -1;
 }
 
+// A choice's font file: "" or FONT_SYSTEM (the system font), FONT_SAME or a file.
+static const char *font_for(const Config *cfg, const char *choice) {
+	if (str_eq(choice, FONT_SAME))
+		return cfg->font_file;
+	if (str_eq(choice, FONT_SYSTEM))
+		return "";
+	return choice;
+}
+
 const char *font_for_app(const Config *cfg, int app) {
-	if (app >= 0 && app < FONT_APP_COUNT) {
-		const char *f = cfg->app_font[app];
-		if (str_eq(f, FONT_APP_SYSTEM))
-			return "";
-		if (f[0])
-			return f;
-	}
-	return cfg->font_file;
+	return app >= 0 && app < FONT_APP_COUNT ? font_for(cfg, cfg->app_font[app]) : "";
+}
+
+const char *font_for_place(const Config *cfg, int place) {
+	return place >= 0 && place < PLACE_COUNT ? font_for(cfg, cfg->place_font[place]) : "";
 }
 
 static void copy_value(char *out, const char *v) {
@@ -321,13 +350,14 @@ int config_load(Config *cfg) {
 			int place = place_key(line);
 			if (place >= 0) {
 				copy_value(cfg->place_font[place], eq + 1);
-				if (!font_name_ok(cfg->place_font[place]))
+				if (!str_eq(cfg->place_font[place], FONT_SAME) && !font_name_ok(cfg->place_font[place]))
 					cfg->place_font[place][0] = '\0';
 			}
 			int app = font_app_key(line);
 			if (app >= 0) {
 				copy_value(cfg->app_font[app], eq + 1);
-				if (!str_eq(cfg->app_font[app], FONT_APP_SYSTEM) && !font_name_ok(cfg->app_font[app]))
+				if (!str_eq(cfg->app_font[app], FONT_SYSTEM) && !str_eq(cfg->app_font[app], FONT_SAME) &&
+				    !font_name_ok(cfg->app_font[app]))
 					cfg->app_font[app][0] = '\0';
 			}
 			int *field = config_field(cfg, line);
@@ -377,7 +407,7 @@ int config_save(const Config *cfg) {
 	for (int p = 0; p < PLACE_COUNT && len < (int)sizeof(text); p++)
 		if (cfg->place_font[p][0])
 			len += sceClibSnprintf(text + len, sizeof(text) - len, "%s=%s\n", PLACE_KEYS[p], cfg->place_font[p]);
-	// Only the apps with a font of their own: the rest follow the Home Screen.
+	// Only the places and apps that don't have the system font.
 	for (int a = 0; a < FONT_APP_COUNT && len < (int)sizeof(text); a++)
 		if (cfg->app_font[a][0])
 			len += sceClibSnprintf(text + len, sizeof(text) - len, KEY_APP_FONT "%s=%s\n", FONT_APPS[a].ids[0],
