@@ -9,7 +9,8 @@
 - **My other projects**, in the installer: the author's other plugins and apps for the Vita, Tweaks/Plugins and CyberFlow Launcher, each with photos and what it does. **Download** lists a project's releases with their notes, and installs the newest one; an older release can be read about and opened on GitHub. Both go in through the Vita's own installer: CyberFlow with a switch for its data files (422 MB), which are unpacked to `ux0:data/RetroFlow`, and Tweaks/Plugins as its own installer app, which then puts the plugin in and keeps it up to date. Everything downloaded is checked against the SHA-256 GitHub lists for it. The photos, releases and notes are kept in `ux0:data/engram_installer`, so they show at once the next time, and with no network.
 - The installer's enter and back buttons are the Vita's own: O and X on a Japanese console, X and O elsewhere, or as HENkaku Settings has them.
 - The installer says when the Engram installed isn't the one it carries, so an update isn't missed.
-- **Install or update Engram** could leave the old plugin in place on a Vita that wouldn't let the file be renamed over or removed. It now writes over the file where it is when that happens, and a copy that still fails shows the system's error code.
+- The installer has a version of its own, 1.0, beside Engram's, and its main page says who Engram is by.
+- **Install or update Engram** could leave the old plugin in place on a Vita that wouldn't let the file be renamed over or removed. It now writes over the file where it is when that happens, and a copy that still fails shows the system's error code and puts the old plugin back.
 
 ### Improved
 

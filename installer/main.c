@@ -51,12 +51,13 @@
 #include "projects.h"
 #include "update.h"
 
-#define INSTALLER_VERSION "1.6"
+#define INSTALLER_VERSION "1.0"
 #ifdef UPDATE_TEST_TAG
 #define VERSION_TEXT "Update test  -  Installer " INSTALLER_VERSION "  -  Engram " ENGRAM_VERSION
 #else
 #define VERSION_TEXT "Installer " INSTALLER_VERSION "  -  Engram " ENGRAM_VERSION
 #endif
+#define CREDIT_TEXT "Engram by badmanwazzy37" // under the version, on the main page
 
 // Room for a 15 MB VPK and one of its files unpacked at a time, on top of the
 // network libraries' own memory: more than the 32 MB a program gets unasked.
@@ -790,12 +791,8 @@ static void render_ui(int view, int selected, int installed, bool ok, const char
 		gfx_text_shadow(40, 20, 54.0f, COLOR_TEXT, "Engram");
 		gfx_font(FONT_TEXT);
 		gfx_text_shadow(44, 90, 19.0f, COLOR_DIM, "Home screen tweaks for the PS Vita");
-#ifdef UPDATE_TEST_TAG
-		const char *version = "Update test  -  Installer " INSTALLER_VERSION "  -  Engram " ENGRAM_VERSION;
-#else
-		const char *version = "Installer " INSTALLER_VERSION "  -  Engram " ENGRAM_VERSION;
-#endif
-		gfx_text_shadow(SCREEN_W - 40 - gfx_text_width(16.0f, version), 42, 16.0f, COLOR_DIM, version);
+		gfx_text_shadow(SCREEN_W - 40 - gfx_text_width(16.0f, VERSION_TEXT), 42, 16.0f, COLOR_DIM, VERSION_TEXT);
+		gfx_text_shadow(SCREEN_W - 40 - gfx_text_width(14.0f, CREDIT_TEXT), 68, 14.0f, COLOR_DIM, CREDIT_TEXT);
 		gfx_panel(LEFT_X, PANEL_Y, 404, PANEL_H, 20, COLOR_PANEL, PANEL_ALPHA);
 		gfx_panel(RIGHT_X, PANEL_Y, 472, PANEL_H, 20, COLOR_PANEL, PANEL_ALPHA);
 		gfx_panel(LEFT_X, 464, 896, 46, 14, COLOR_PANEL, PANEL_ALPHA);
