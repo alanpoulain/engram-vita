@@ -158,19 +158,45 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 	const DETAILS = [
 		{
 			photos: 'tweaks',
-			release: 'Tweaks/Plugins 1.0  (9 Nov 2026)', // on the Vita: looked up on GitHub as the window opens
+			release: 'Tweaks/Plugins 1.0.1  (19 Nov 2026)', // on the Vita: looked up on GitHub as the window opens
 			what: [
 				'Adds a Tweaks/Plugins row to Settings, straight under HENkaku Settings, and moves every plugin\'s settings page into it.',
 				'Finds pages by itself: a newly installed plugin shows up the next time Settings opens.',
-				'Each page is in one place: one that has moved is taken out of where its plugin put it.',
-				'Settings keep working. Plugins still read and save their own values.',
-				'Safe: if Settings crashes right after a change, the next launch leaves Settings alone.',
+				'Your choice: a switch for each plugin\'s page, to list it in Tweaks/Plugins or leave it where its plugin put it.',
+				'taiHEN Plugins: turn the plugins in your taiHEN config on and off, with a Reboot button.',
+				'Safe: if Settings ever crashes on it, it steps out of the way.',
+				'Install puts the Tweaks/Plugins Installer on the home screen: an app of its own, like this one, that installs Tweaks/Plugins and keeps it up to date.',
 			],
-			icon: null,
+			icon: 'tweaks',
 			hasData: false,
 			releases: [
 				{
-					name: 'Tweaks/Plugins 1.0', date: '9 Nov 2026', pre: false, install: '18 KB', data: '',
+					name: 'Tweaks/Plugins 1.0.1', date: '19 Nov 2026', pre: true, install: '460 KB', data: '',
+					notes: [
+						[0, 'Pre-release for testing. The installer is new and still being tested.'],
+						[3, ''],
+						[1, 'Install'],
+						[3, ''],
+						[2, 'With the installer: install tweaks_installer.vpk with VitaShell, open Tweaks/Plugins Installer and choose Install or update, then restart the Vita.'],
+						[2, 'By hand: copy tweaks.suprx to ur0:tai and list it first under *NPXS10015 in your taiHEN config.'],
+						[3, ''],
+						[1, 'New'],
+						[3, ''],
+						[2, 'Installer. Installs, updates and uninstalls the plugin, checks GitHub for a new version and updates itself.'],
+						[2, 'Write Log switch at the top of Tweaks/Plugins.'],
+						[2, 'Tweaks/Plugins Settings -> Plugins in Settings. A switch for each plugin page: list it in Tweaks/Plugins, or leave it where its plugin put it.'],
+						[2, 'Tweaks/Plugins Settings -> taiHEN Plugins. Turn the plugins in your taiHEN config on and off, section by section, with a Reboot button.'],
+						[3, ''],
+						[1, 'Fixed'],
+						[3, ''],
+						[2, 'Pages with buttons are moved too. Wi-Fi Turbo stayed under Network in 1.0 (#1).'],
+						[2, 'Does nothing under *NPXS10016, the Settings pop-up other apps open, if it\'s listed there as well.'],
+						[2, 'Crash guard gives up less easily.'],
+					],
+				},
+				{
+					// (an older release: read about here, and got from its page)
+					name: 'Tweaks/Plugins 1.0', date: '9 Nov 2026', pre: false, install: '', data: '',
 					notes: [
 						[0, "First release of Tweaks/Plugins: one Settings menu for all your plugins' settings pages, right under HENkaku Settings."],
 						[3, ''],
@@ -188,11 +214,10 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 				},
 			],
 			steps: () => [
-				[COLOR_DIM, 'Downloading tweaks.suprx (18 KB)... 100%'],
+				[COLOR_DIM, 'Downloading tweaks_installer.vpk (460 KB)... 100%'],
 				[COLOR_GOOD, 'Its SHA-256 is the one GitHub lists.'],
-				[COLOR_GOOD, 'Copied tweaks.suprx to ur0:tai/tweaks.suprx.'],
-				[COLOR_GOOD, 'Config updated: Tweaks/Plugins is first under *NPXS10015. The old one is kept.'],
-				[COLOR_GOOD, 'Done. Restart the Vita, then open Settings.'],
+				[COLOR_GOOD, 'Installed Tweaks/Plugins Installer. Its bubble is on the home screen.'],
+				[COLOR_GOOD, 'Done. Open Tweaks/Plugins Installer from the home screen to install Tweaks/Plugins.'],
 			],
 		},
 		{
@@ -448,7 +473,8 @@ button kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); mar
 		if (!r)
 			return [];
 		const list = [];
-		if (r.install) {
+		// Only the newest release installs from here: an older one can be read about, and got from its page.
+		if (rel === 0 && r.install) {
 			list.push(['install', 'Install', r.install]);
 			if (detail.hasData && r.data)
 				list.push(['data', 'Data files: ' + (dataFiles ? 'On' : 'Off'), r.data]);

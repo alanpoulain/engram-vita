@@ -16,8 +16,10 @@ from PIL import Image
 
 RAW = 'https://raw.githubusercontent.com/chazzarchibald-ops/'
 PHOTOS = {
-    'tweaks': ['vita-tweaks-plugins/main/screenshots/settings-top-menu.png',
-               'vita-tweaks-plugins/main/screenshots/tweaks-plugins.png'],
+    'tweaks': ['vita-tweaks-plugins/main/screenshots/tweaks-plugins.png',
+               'vita-tweaks-plugins/main/screenshots/tweaks-plugins-settings.png',
+               'vita-tweaks-plugins/main/screenshots/plugins-in-settings.png',
+               'vita-tweaks-plugins/main/screenshots/taihen-plugins.png'],
     'cyberflow': ['CyberFLow-Launcher/main/Media/Screenshots/start_menu.png',
                   'CyberFLow-Launcher/main/Media/Screenshots/game_info.png',
                   'CyberFLow-Launcher/main/Media/Screenshots/settings_menu.png',
@@ -25,7 +27,8 @@ PHOTOS = {
                   'CyberFLow-Launcher/main/Media/Screenshots/theme_menu.png'],
 }
 # The projects that have a bubble, and where its picture is.
-ICONS = {'cyberflow': 'CyberFLow-Launcher/HEAD/sce_sys/icon0.png'}
+ICONS = {'tweaks': 'vita-tweaks-plugins/HEAD/installer/sce_sys/icon0.png',
+         'cyberflow': 'CyberFLow-Launcher/HEAD/sce_sys/icon0.png'}
 ICON_SIZES = (48, 34)
 SIZE = (448, 254)
 here = os.path.dirname(os.path.abspath(__file__))  # (the installer's folder)

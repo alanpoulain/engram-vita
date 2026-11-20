@@ -136,18 +136,52 @@ static void log_clear(void) {
 
 // ---- files ----
 
-// Puts new_path in place of path: a rename, and where it can't replace a
-// file, path is removed first and, if the rename still fails, old is written
-// back.
-static bool replace_file(const char *path, const char *new_path, const char *old, int old_len) {
+// The system's answer to the step that failed when a file couldn't be put in
+// place: it goes on screen beside what went wrong.
+static int put_error;
+
+// Puts new_path, which holds fresh, in place of path. A rename, so that a
+// power cut can't leave half a file; where a rename can't replace a file,
+// path is removed first. Where the system will do neither, fresh is written
+// over the file that is there. If nothing works, old is written back.
+static bool replace_file(const char *path, const char *new_path, const char *fresh, int fresh_len, const char *old,
+                         int old_len) {
+	put_error = 0;
 	if (sceIoRename(new_path, path) >= 0)
 		return true;
-	sceIoRemove(path);
-	if (sceIoRename(new_path, path) >= 0)
+	int removed = sceIoRemove(path);
+	int renamed = sceIoRename(new_path, path);
+	if (renamed >= 0)
 		return true;
+	if (file_write_checked(path, fresh, fresh_len))
+		return true;
+	put_error = file_write_error() ? file_write_error() : removed < 0 ? removed : renamed;
 	if (old)
 		file_write(path, old, old_len);
 	return false;
+}
+
+// Puts buf at path as a plugin goes in: written beside it and checked, put in
+// its place, and read back from there. If it can't be written beside it, it
+// is written where it goes.
+static bool put_file(const char *path, const char *buf, int len) {
+	char side[128];
+	snprintf(side, sizeof(side), "%s.installer-new", path);
+	bool put;
+	if (file_write_checked(side, buf, len)) {
+		put = replace_file(path, side, buf, len, NULL, 0);
+	} else {
+		put = file_write_checked(path, buf, len);
+		put_error = put ? 0 : file_write_error();
+	}
+	sceIoRemove(side);
+	if (put) {
+		int back_len = 0;
+		char *back = file_read(path, len + 1, &back_len);
+		put = back && back_len == len && memcmp(back, buf, (size_t)len) == 0;
+		free(back);
+	}
+	return put;
 }
 
 // ---- taiHEN's config.txt ----
@@ -380,7 +414,7 @@ static bool change_config(bool (*edit)(Lines *), int *changes, const char *uncha
 	snprintf(side, sizeof(side), "%s.engram-installer-old", path);
 	snprintf(fresh, sizeof(fresh), "%s.engram-installer-new", path);
 	bool done = file_write_checked(side, old, len) && file_write_checked(fresh, text_new, new_len) &&
-	            replace_file(path, fresh, old, len);
+	            replace_file(path, fresh, text_new, new_len, old, len);
 	if (done) {
 		int back_len = 0;
 		char *back = file_read(path, CONFIG_MAX, &back_len);
@@ -390,7 +424,7 @@ static bool change_config(bool (*edit)(Lines *), int *changes, const char *uncha
 	if (done)
 		log_add(COLOR_GOOD, "Config updated. The old one is %s", side);
 	else
-		log_add(COLOR_BAD, "Couldn't write the config: it was left as it was.");
+		log_add(COLOR_BAD, "Couldn't write the config (0x%08X): it was left as it was.", (unsigned)put_error);
 	sceIoRemove(fresh);
 	free(old);
 	free(text_new);
@@ -400,28 +434,6 @@ static bool change_config(bool (*edit)(Lines *), int *changes, const char *uncha
 static bool edit_install(Lines *ls) {
 	return put_in_section(ls, "main", false) && put_in_section(ls, "NPXS10015", true) &&
 	       put_in_section(ls, "NPXS10016", true);
-}
-
-// Tweaks/Plugins' line: the first under the Settings app's section, as its
-// README asks, with any earlier line of its own there taken out.
-#define TWEAKS_PATH "ur0:tai/tweaks.suprx"
-
-static bool edit_tweaks(Lines *ls) {
-	int header = section_start(ls, "NPXS10015");
-	if (header < 0) {
-		if (ls->count && ls->line[ls->count - 1][0])
-			lines_insert(ls, ls->count, "");
-		return lines_insert(ls, ls->count, "*NPXS10015") && lines_insert(ls, ls->count, TWEAKS_PATH);
-	}
-	for (int i = header + 1; i < ls->count && !is_any_section(ls->line[i]);) {
-		char t[512];
-		trimmed(ls->line[i], t, sizeof(t));
-		if (t[0] && t[0] != '#' && ends_with_nocase(t, "/tweaks.suprx"))
-			lines_remove(ls, i);
-		else
-			i++;
-	}
-	return lines_insert(ls, header + 1, TWEAKS_PATH);
 }
 
 static bool edit_uninstall(Lines *ls) {
@@ -480,18 +492,10 @@ static bool install(void) {
 		return false;
 	}
 	sceIoMkdir("ur0:tai", 0777);
-	bool copied = file_write_checked(PLUGIN_PATH ".installer-new", plugin, len) &&
-	              replace_file(PLUGIN_PATH, PLUGIN_PATH ".installer-new", NULL, 0);
-	if (copied) {
-		int back_len = 0;
-		char *back = file_read(PLUGIN_PATH, PLUGIN_MAX, &back_len);
-		copied = back && back_len == len && memcmp(back, plugin, len) == 0;
-		free(back);
-	}
+	bool copied = put_file(PLUGIN_PATH, plugin, len);
 	free(plugin);
-	sceIoRemove(PLUGIN_PATH ".installer-new");
 	if (!copied) {
-		log_add(COLOR_BAD, "Couldn't copy engram.suprx to " PLUGIN_PATH ".");
+		log_add(COLOR_BAD, "Couldn't copy engram.suprx to " PLUGIN_PATH " (0x%08X).", (unsigned)put_error);
 		return false;
 	}
 	log_add(COLOR_GOOD, "Copied engram.suprx (%d bytes) to " PLUGIN_PATH ".", len);
@@ -579,8 +583,8 @@ static const char *const FEATURES[][2] = {
 
 // The author's other projects for the Vita, shown under "My other projects":
 // a card each beside the menu, and a window with more: its photos and what it
-// does, and behind its Download button its releases, each with its notes and
-// the buttons that install it.
+// does, and behind its Download button its releases, each with its notes. The
+// newest release has the buttons that install it.
 typedef struct {
 	const char *name, *kind; // kind: "Plugin" or "App"
 	uint32_t color;          // its emblem's: a ball of this colour
@@ -593,16 +597,18 @@ typedef struct {
 	bool has_data; // its releases come with data files, which a switch leaves out
 } Project;
 static const Project PROJECTS[] = {
-	{"Tweaks/Plugins", "Plugin", RGB(0x4C, 0xD9, 0xA4), "T", NULL,
+	{"Tweaks/Plugins", "Plugin", RGB(0x4C, 0xD9, 0xA4), "T", "tweaks",
 	 "Brings your plugins' settings pages together in one Tweaks/Plugins menu in Settings.",
 	 "github.com/chazzarchibald-ops/vita-tweaks-plugins",
 	 {"Adds a Tweaks/Plugins row to Settings, straight under HENkaku Settings, and moves every plugin's settings "
 	  "page into it.",
 	  "Finds pages by itself: a newly installed plugin shows up the next time Settings opens.",
-	  "Each page is in one place: one that has moved is taken out of where its plugin put it.",
-	  "Settings keep working. Plugins still read and save their own values.",
-	  "Safe: if Settings crashes right after a change, the next launch leaves Settings alone."},
-	 5, false},
+	  "Your choice: a switch for each plugin's page, to list it in Tweaks/Plugins or leave it where its plugin put it.",
+	  "taiHEN Plugins: turn the plugins in your taiHEN config on and off, with a Reboot button.",
+	  "Safe: if Settings ever crashes on it, it steps out of the way.",
+	  "Install puts the Tweaks/Plugins Installer on the home screen: an app of its own, like this one, that "
+	  "installs Tweaks/Plugins and keeps it up to date."},
+	 6, false},
 	{"CyberFlow Launcher", "App", RGB(0xFC, 0xE4, 0x2A), "C", "cyberflow",
 	 "A Cyberpunk 2077 styled game launcher, built on RetroFlow's 3D coverflow library.",
 	 "github.com/chazzarchibald-ops/CyberFLow-Launcher",
@@ -620,7 +626,7 @@ static const Project PROJECTS[] = {
 #define PROJECT_TWEAKS 0
 #define PROJECT_CYBERFLOW 1
 #define TWEAKS_REPO "chazzarchibald-ops/vita-tweaks-plugins"
-#define TWEAKS_FILE "tweaks.suprx"
+#define TWEAKS_VPK "tweaks_installer.vpk" // its own installer: it is what gets installed, not the plugin
 #define CYBERFLOW_REPO "chazzarchibald-ops/CyberFLow-Launcher"
 #define CYBERFLOW_VPK "*.vpk" // its name has the version in it
 #define CYBERFLOW_DATA "CyberFlow_data.zip"
@@ -629,7 +635,7 @@ static const Project PROJECTS[] = {
 // that order), and the folder its screenshots are in, which its photos are
 // made from.
 static const LiveSource LIVE[PROJECT_COUNT] = {
-	{"tweaks", TWEAKS_REPO, "screenshots", {TWEAKS_FILE, NULL, NULL}},
+	{"tweaks", TWEAKS_REPO, "screenshots", {TWEAKS_VPK, NULL, NULL}},
 	{"cyberflow", CYBERFLOW_REPO, "Media/Screenshots", {CYBERFLOW_VPK, CYBERFLOW_DATA, NULL}},
 };
 
@@ -641,7 +647,7 @@ static int win_level;
 // At either level: whether the buttons act on the right side, and an install
 // under way (its lines are in the log, over the right side).
 static bool win_side;
-static bool win_job, job_running, job_ok, job_restart;
+static bool win_job, job_running, job_ok;
 // The projects: the one chosen, the button chosen on its right side, how far
 // that side is scrolled, and the photo showing.
 static int win_project, win_action, win_scroll, win_scroll_max, win_photo;
@@ -911,7 +917,9 @@ static int window_buttons(const Release *release, Button *b) {
 	}
 	if (!release)
 		return 0;
-	if (release->size[0][0]) { // the release has the file Install wants
+	// Only the newest release installs from here: an older one can be read about,
+	// and got from its page.
+	if (rel_index == 0 && release->size[0][0]) { // and it has the file Install wants
 		b[n].kind = ACT_INSTALL;
 		snprintf(b[n].label, sizeof(b[0].label), "Install");
 		snprintf(b[n++].size, sizeof(b[0].size), "%s", release->size[0]);
@@ -1158,7 +1166,7 @@ static void render_window(void) {
 	if (job_running)
 		snprintf(hint, sizeof(hint), "One moment... Keep this app open.");
 	else if (win_job)
-		snprintf(hint, sizeof(hint), "%s%s: back", job_restart ? "START: restart the Vita now        " : "", back_name);
+		snprintf(hint, sizeof(hint), "%s: back", back_name);
 	else if (page_failed)
 		snprintf(hint, sizeof(hint), "The browser wouldn't open. Its address is on the project's card.");
 	else if (win_side)
@@ -1171,38 +1179,22 @@ static void render_window(void) {
 	gfx_end();
 }
 
-// Tweaks/Plugins: its plugin into ur0:tai, and its line first under the
-// Settings app's section of taiHEN's config.
+// Tweaks/Plugins: its own installer, through the system's installer. That app
+// then puts the plugin in and keeps it up to date, so nothing of
+// Tweaks/Plugins' is placed from here.
 static bool install_tweaks(const char *tag) {
 	ProjectFile file;
-	if (!project_find(TWEAKS_REPO, tag, TWEAKS_FILE, &file, say))
+	char title[64];
+	if (!project_find(TWEAKS_REPO, tag, TWEAKS_VPK, &file, say))
 		return false;
-	uint8_t *plugin = project_fetch(&file, 4 * 1024 * 1024, say);
-	if (!plugin)
+	uint8_t *vpk = project_fetch(&file, 16 * 1024 * 1024, say);
+	if (!vpk)
 		return false;
-	sceIoMkdir("ur0:tai", 0777);
-	bool copied = file_write_checked(TWEAKS_PATH ".installer-new", (const char *)plugin, file.size) &&
-	              replace_file(TWEAKS_PATH, TWEAKS_PATH ".installer-new", NULL, 0);
-	if (copied) {
-		int back_len = 0;
-		char *back = file_read(TWEAKS_PATH, file.size + 1, &back_len);
-		copied = back && back_len == file.size && memcmp(back, plugin, (size_t)file.size) == 0;
-		free(back);
-	}
-	free(plugin);
-	sceIoRemove(TWEAKS_PATH ".installer-new");
-	if (!copied) {
-		say(SAY_BAD, false, "Couldn't copy tweaks.suprx to " TWEAKS_PATH ".");
+	bool ok = project_install_vpk(vpk, file.size, title, sizeof(title), say);
+	free(vpk);
+	if (!ok)
 		return false;
-	}
-	say(SAY_GOOD, false, "Copied tweaks.suprx (%d bytes) to " TWEAKS_PATH ".", file.size);
-	int changes = 0;
-	if (!change_config(edit_tweaks, &changes, "The config had Tweaks/Plugins first under *NPXS10015 already.")) {
-		say(SAY_BAD, false, "The config wasn't changed, so Tweaks/Plugins won't load yet.");
-		return false;
-	}
-	job_restart = true;
-	say(SAY_GOOD, false, "Done. Restart the Vita, then open Settings.");
+	say(SAY_GOOD, false, "Done. Open %s from the home screen to install Tweaks/Plugins.", title);
 	return true;
 }
 
@@ -1237,7 +1229,7 @@ static bool install_cyberflow(const char *tag) {
 static void window_install(const char *tag) {
 	log_clear();
 	win_job = job_running = true;
-	job_ok = job_restart = false;
+	job_ok = false;
 	job_ok = win_project == PROJECT_TWEAKS ? install_tweaks(tag) : install_cyberflow(tag);
 	job_running = false;
 }
@@ -1397,9 +1389,7 @@ int main(void) {
 			if (*action >= count)
 				*action = 0;
 			if (win_job) { // what an install said is up: read it, then back
-				if ((pressed & SCE_CTRL_START) && job_restart)
-					scePowerRequestColdReset();
-				else if (pressed & (btn_enter | btn_back)) // either: there is only the one thing to do
+				if (pressed & (btn_enter | btn_back)) // either: there is only the one thing to do
 					win_job = false;
 			} else if (!releases && (pressed & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER))) {
 				if (info.photos > 0)

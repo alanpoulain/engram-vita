@@ -42,7 +42,7 @@ Everything since 1.5:
 **New**
 
 - **Engram Installer**, an app that installs, updates and uninstalls Engram for you, and updates itself from GitHub. See [Engram Installer](#engram-installer).
-- **My other projects**, in the installer: the author's other plugins and apps for the Vita, with photos, each release's notes, and an Install button.
+- **My other projects**, in the installer: the author's other plugins and apps for the Vita, with photos, each release's notes, and an Install button for the newest.
 - **A Logging switch** in Settings.
 
 **Improved**
@@ -265,7 +265,7 @@ Settings are saved to `ur0:data/engram/config.txt`, and the home screen picks up
 - **Add the fonts** is a switch. With it on, installing also puts Poppins and Righteous, the app's own fonts, in Engram's fonts folder, to choose in its Font settings.
 - **Check for a new version** asks GitHub for the latest release. If there is a newer one, it downloads that release's installer, checks it against the SHA-256 GitHub lists, and has the Vita install it over the one running.
 - **Uninstall Engram** takes the plugin and its lines out. Your settings and fonts stay.
-- **My other projects** shows the author's other plugins and apps for the Vita, each with photos and what it does. **Download** lists a project's releases with their notes and installs the one you choose: an app through the Vita's own installer, a plugin into `ur0:tai` and taiHEN's config. Everything downloaded is checked against the SHA-256 GitHub lists for it.
+- **My other projects** shows the author's other plugins and apps for the Vita, each with photos and what it does. **Download** lists a project's releases with their notes, and installs the newest one through the Vita's own installer; an older release can be read about and opened on GitHub. A plugin's install is its own installer app, which then puts the plugin in and keeps it up to date. Everything downloaded is checked against the SHA-256 GitHub lists for it.
 
 The photos, releases and notes in My other projects come from GitHub as you open it, and are kept in `ux0:data/engram_installer`, so they show at once the next time, and with no network.
 

@@ -86,6 +86,8 @@ vita_create_vpk(engram_installer.vpk ${VITA_TITLEID} eboot.bin
   FILE ${ENGRAM_SUPRX} engram.suprx
   FILE ${UPDATER_SFO} updater/param.sfo
   # the other projects' own bubble pictures, for their emblems (make_photos.py makes them)
+  FILE icons/tweaks_48.rgb icons/tweaks_48.rgb
+  FILE icons/tweaks_34.rgb icons/tweaks_34.rgb
   FILE icons/cyberflow_48.rgb icons/cyberflow_48.rgb
   FILE icons/cyberflow_34.rgb icons/cyberflow_34.rgb
   # the fonts the app's text is in (SIL Open Font License: the licence goes with them)

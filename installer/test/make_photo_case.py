@@ -15,7 +15,7 @@ from PIL import Image
 UA = {'User-Agent': 'EngramInstaller', 'Accept': 'application/vnd.github+json'}
 FW, FH, FILL = 448, 254, (0x18, 0x1C, 0x2C)
 PROJECTS = [
-    ('tweaks', 'chazzarchibald-ops/vita-tweaks-plugins', 'screenshots', ['tweaks.suprx', '*.vpk']),
+    ('tweaks', 'chazzarchibald-ops/vita-tweaks-plugins', 'screenshots', ['tweaks_installer.vpk', 'tweaks.suprx', '*.vpk']),
     ('cyberflow', 'chazzarchibald-ops/CyberFLow-Launcher', 'Media/Screenshots', ['*.vpk', 'CyberFlow_data.zip', 'tweaks.suprx']),
 ]
 
@@ -292,7 +292,7 @@ for key, repo, folder, assets in PROJECTS:
         else:
             expect.append('  asset %s NONE' % want)
 # every release of a project, with its notes
-for key, repo, assets in (('tweaks', PROJECTS[0][1], ['tweaks.suprx']), ('cyberflow', PROJECTS[1][1], ['*.vpk', 'CyberFlow_data.zip']),
+for key, repo, assets in (('tweaks', PROJECTS[0][1], ['tweaks_installer.vpk', 'tweaks.suprx']), ('cyberflow', PROJECTS[1][1], ['*.vpk', 'CyberFlow_data.zip']),
                           ('engram', 'chazzarchibald-ops/engram-vita', ['engram_installer.vpk', 'engram.suprx'])):
     raw = get('https://api.github.com/repos/%s/releases?per_page=8' % repo)
     answers.append((2, key + '_releases', repo, raw, assets))
