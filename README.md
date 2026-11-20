@@ -111,6 +111,10 @@ The same credits appear at the bottom of the Engram page in Settings, as the sma
 
 Retail firmware 3.65 only, because it checks SceShell's module NID.
 
+## License
+
+Engram and its installer are [MIT](LICENSE) licensed. The two fonts the installer carries, Poppins and Righteous, are under the SIL Open Font License: their licence texts are beside them in `installer/font`, and in the VPK.
+
 ## Scroll Animations
 
 The Vita's home screen scrolls vertically, so each effect is Cylinder's idea turned 90 degrees.
