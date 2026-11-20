@@ -1,6 +1,6 @@
 # Engram
 
-![A PS Vita home screen with Engram running on a custom theme](screenshots/home-screen.webp)
+![A PS Vita home screen on a custom theme, its icons laid out in 3D by Engram's Icon Placement](screenshots/home-screen.png)
 
 Engram is a set of tweaks for the PS Vita's home screen, set in **Settings → System → Engram**. Its settings are grouped by category. There are two, **Live Area** and **Fonts**.
 
@@ -15,10 +15,13 @@ Engram is a set of tweaks for the PS Vita's home screen, set in **Settings → S
 
 Engram will grow with future updates: more ways to change the home screen's animations, lock screen customizations, and more. New categories will sit next to Live Area and Fonts.
 
-| | |
+| App Page Animation | Icon Placement in a folder |
 |---|---|
-| ![Engram's page in Settings, with the Live Area category and the credits](screenshots/engram.png) | ![Scroll Animations settings](screenshots/scroll-animations.png) |
-| ![Choosing Scroll Animations effects](screenshots/effects.png) | ![Motion Depth settings](screenshots/motion-depth.png) |
+| ![Swiping from the home screen to Engram Installer's page, the two turning like the sides of a cube](screenshots/app-page-animation.png) | ![An open folder, Extras, with its icons laid out on a sphere](screenshots/folder-sphere.png) |
+
+| Engram in Settings | Live Area | Fonts |
+|---|---|---|
+| ![Engram 1.6's page in Settings: the Engram and Logging switches, the Live Area and Fonts categories, and the credits](screenshots/engram.png) | ![The Live Area category: Scroll Animations, Motion Depth, Icon Placement and App Page Animation](screenshots/live-area.png) | ![The Fonts category: a font each for the Live Area, the lock screen, the status bar and notifications, the boot warning and the quick menu](screenshots/fonts.png) |
 
 ```text
 Settings > System > Engram
