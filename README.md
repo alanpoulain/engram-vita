@@ -370,6 +370,13 @@ The Settings page uses the same recipe as HENkaku and Turbo Storage ([vita-turbo
 
 You need [VitaSDK](https://vitasdk.org) and Paf's C++ headers from [ScePaf-RE](https://github.com/GrapheneCt/ScePaf-RE), which aren't included here. Engram was built against a lightly modified copy of them (its `paf/math/math.h` defines the vector classes), so the current upstream may need small changes.
 
+Unmodified ScePaf-RE builds Engram at commit `6129e91` (2025-09-01). The next one, `7b1d3b6` ("Updated everything"), doesn't: its `paf/common/halt_assert.h` defines a global `Log` object in the header, which needs a C runtime to construct and destroy, and Engram has none (the link fails on `__dso_handle`, `__aeabi_atexit` and `empty_string`).
+
+```sh
+git clone https://github.com/GrapheneCt/ScePaf-RE
+git -C ScePaf-RE checkout 6129e91
+```
+
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPAF_HEADERS_DIR=/path/to/ScePaf-RE/include
 cmake --build build
